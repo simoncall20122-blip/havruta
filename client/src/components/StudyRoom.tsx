@@ -47,6 +47,15 @@ interface ParallelSource {
   displayRef: string;
 }
 
+interface SourceTab {
+  id: string;
+  label: string;
+  ref: string;
+  lines: string[];
+  loading: boolean;
+  error: boolean;
+}
+
 interface CommentaryState {
   loading: boolean;
   lines: string[];
@@ -170,12 +179,11 @@ const StudyRoom = () => {
   const [allParallels, setAllParallels] = useState<ParallelSource[]>([]);
   const [selectedRange, setSelectedRange] = useState<{ start: number; end: number } | null>(null);
   const [openCommentaries, setOpenCommentaries] = useState<Record<string, CommentaryState>>({});
-  const [openParallel, setOpenParallel] = useState<{
-    displayRef: string;
-    loading: boolean;
-    lines: string[];
-    error: boolean;
-  } | null>(null);
+
+  // מקורות מקבילים נפתחים כטאבים עצמאיים (כמו טאבים בדפדפן) - כל אחד שומר את המצב שלו,
+  // אפשר לעבור חופשי בין הטאבים ולחזור לדף הראשי בלי לאבד כלום
+  const [sourceTabs, setSourceTabs] = useState<SourceTab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string>('main');
 
   // צ'אט
   const [chatName, setChatName] = useState<string>(() => localStorage.getItem('havruta_chat_name') || '');
@@ -320,18 +328,30 @@ const StudyRoom = () => {
         return result;
       })();
 
-  // מקור מקביל נפתח בחלון נפרד (מודל), לא בתוך הפאנל - כדי לא לרמוס את מה שלומדים בטקסט הראשי
+  // מקור מקביל נפתח כטאב עצמאי (כמו טאב חדש בדפדפן) - אם כבר פתוח, פשוט עוברים אליו
   const openParallelSource = async (p: ParallelSource) => {
-    setOpenParallel({ displayRef: p.displayRef, loading: true, lines: [], error: false });
+    const existing = sourceTabs.find((t) => t.ref === p.ref);
+    if (existing) {
+      setActiveTabId(existing.id);
+      return;
+    }
+    const id = p.ref;
+    setSourceTabs((prev) => [...prev, { id, label: p.displayRef, ref: p.ref, lines: [], loading: true, error: false }]);
+    setActiveTabId(id);
     try {
       const res = await fetch(`http://localhost:5000/api/text/${encodeURIComponent(p.ref)}`);
       const data = await res.json();
       const lines: string[] = Array.isArray(data.hebrewText) ? data.hebrewText : [];
-      setOpenParallel({ displayRef: p.displayRef, loading: false, lines, error: lines.length === 0 });
+      setSourceTabs((prev) => prev.map((t) => (t.id === id ? { ...t, lines, loading: false, error: lines.length === 0 } : t)));
     } catch (e) {
       console.error('[מקורות מקבילים] שגיאה בטעינת המקור:', e);
-      setOpenParallel({ displayRef: p.displayRef, loading: false, lines: [], error: true });
+      setSourceTabs((prev) => prev.map((t) => (t.id === id ? { ...t, loading: false, error: true } : t)));
     }
+  };
+
+  const closeSourceTab = (id: string) => {
+    setSourceTabs((prev) => prev.filter((t) => t.id !== id));
+    setActiveTabId((prev) => (prev === id ? 'main' : prev));
   };
 
   const toggleCommentator = async (c: { en: string; refs: string[] }) => {
@@ -836,6 +856,40 @@ const StudyRoom = () => {
               {/* קו שוליים דק, כמו שוליים בספר מודפס */}
               <div className="absolute top-6 bottom-6 left-6 w-px bg-hairline hidden sm:block pointer-events-none" />
 
+              {/* שורת טאבים - מקורות מקבילים נפתחים כטאב עצמאי, כמו בדפדפן */}
+              {sourceTabs.length > 0 && (
+                <div className="flex items-center gap-1 px-3 pt-3 shrink-0 overflow-x-auto">
+                  <button
+                    onClick={() => setActiveTabId('main')}
+                    className={`px-3 py-1.5 rounded-t-lg text-sm font-semibold whitespace-nowrap transition-colors ${
+                      activeTabId === 'main' ? 'bg-white text-cover' : 'text-ink/40 hover:text-ink/60'
+                    }`}
+                  >
+                    {currentRef || 'הדף הנוכחי'}
+                  </button>
+                  {sourceTabs.map((tab) => (
+                    <div
+                      key={tab.id}
+                      className={`flex items-center gap-1 pr-1 pl-2 py-1.5 rounded-t-lg text-sm font-semibold whitespace-nowrap transition-colors ${
+                        activeTabId === tab.id ? 'bg-white text-cover' : 'text-ink/40 hover:text-ink/60'
+                      }`}
+                    >
+                      <button onClick={() => setActiveTabId(tab.id)} className="max-w-[140px] truncate">
+                        {tab.label}
+                      </button>
+                      <button
+                        onClick={() => closeSourceTab(tab.id)}
+                        aria-label={`סגור טאב ${tab.label}`}
+                        className="p-0.5 rounded hover:bg-ribbon/10 hover:text-ribbon transition-colors"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex-1 min-h-0 flex flex-col" style={{ display: activeTabId === 'main' ? 'flex' : 'none' }}>
               {loadingText ? (
                 <div className="flex items-center justify-center flex-1 text-ink/40 gap-2">
                   <Loader2 size={22} className="animate-spin" />
@@ -995,6 +1049,28 @@ const StudyRoom = () => {
                   </div>
                 </>
               )}
+              </div>
+
+              {sourceTabs.map((tab) => (
+                <div
+                  key={tab.id}
+                  className="flex-1 min-h-0 flex-col overflow-y-auto scroll-parchment px-6 sm:px-8 py-5 font-classic text-xl leading-loose space-y-2 text-ink"
+                  style={{ display: activeTabId === tab.id ? 'flex' : 'none' }}
+                >
+                  {tab.loading ? (
+                    <div className="flex items-center justify-center flex-1 text-ink/40 gap-2 font-sans text-base">
+                      <Loader2 size={20} className="animate-spin" />
+                      טוען...
+                    </div>
+                  ) : tab.error || tab.lines.length === 0 ? (
+                    <div className="flex items-center justify-center flex-1 text-ink/40 font-sans text-base">
+                      לא נמצא טקסט זמין עבור מקור זה.
+                    </div>
+                  ) : (
+                    tab.lines.map((line, i) => <p key={i} dangerouslySetInnerHTML={{ __html: line }} />)
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
@@ -1119,7 +1195,7 @@ const StudyRoom = () => {
                                     key={p.ref}
                                     onClick={() => openParallelSource(p)}
                                     className="px-3 py-1.5 rounded-full text-sm font-medium border bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark transition-colors"
-                                    title="נפתח בחלון נפרד, בלי לגעת בטקסט שאתה לומד כרגע"
+                                    title="נפתח בטאב חדש, בלי לגעת בדף שאתה לומד כרגע"
                                   >
                                     {p.displayRef}
                                   </button>
@@ -1148,47 +1224,6 @@ const StudyRoom = () => {
           <HelpCircle size={13} className="text-brass-light" />
           הסבר עם AI
         </button>
-      )}
-
-      {/* מקור מקביל נפתח כאן, בחלון נפרד מעל הכל - הטקסט הראשי שלומדים נשאר בדיוק כמו שהיה מתחת */}
-      {openParallel && (
-        <div
-          className="fixed inset-0 z-[60] bg-ink/40 flex items-center justify-center p-4"
-          onClick={() => setOpenParallel(null)}
-        >
-          <div
-            className="bg-parchment-50 rounded-2xl shadow-2xl border border-hairline max-w-xl w-full max-h-[80vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-hairline bg-parchment-100/60 rounded-t-2xl shrink-0">
-              <h3 className="font-bold text-cover font-classic text-lg truncate">{openParallel.displayRef}</h3>
-              <button
-                onClick={() => setOpenParallel(null)}
-                className="p-1.5 rounded-lg text-ink/40 hover:text-ribbon hover:bg-ribbon/10 transition-colors shrink-0"
-                aria-label="סגור חלון מקור מקביל"
-                title="סגור"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="p-5 overflow-y-auto font-classic text-lg leading-relaxed text-ink">
-              {openParallel.loading ? (
-                <div className="flex items-center gap-2 text-ink/40 text-sm py-8 justify-center font-sans">
-                  <Loader2 size={18} className="animate-spin" />
-                  טוען...
-                </div>
-              ) : openParallel.error || openParallel.lines.length === 0 ? (
-                <div className="text-ink/40 text-sm text-center py-8 font-sans">לא נמצא טקסט זמין עבור מקור זה.</div>
-              ) : (
-                <div className="space-y-2">
-                  {openParallel.lines.map((line, i) => (
-                    <p key={i} dangerouslySetInnerHTML={{ __html: line }} />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
       )}
 
       {/* אזור הדפסה בלבד - מוסתר במסך, מופיע רק בדיאלוג ההדפסה/יצוא PDF */}
