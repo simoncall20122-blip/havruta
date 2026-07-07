@@ -40,6 +40,13 @@ interface CommentaryLink {
   anchorRef: string;
 }
 
+interface ParallelSource {
+  ref: string;
+  anchorRef: string;
+  category: string;
+  displayRef: string;
+}
+
 interface CommentaryState {
   loading: boolean;
   lines: string[];
@@ -160,8 +167,15 @@ const StudyRoom = () => {
 
   // מפרשים
   const [allLinks, setAllLinks] = useState<CommentaryLink[]>([]);
+  const [allParallels, setAllParallels] = useState<ParallelSource[]>([]);
   const [selectedRange, setSelectedRange] = useState<{ start: number; end: number } | null>(null);
   const [openCommentaries, setOpenCommentaries] = useState<Record<string, CommentaryState>>({});
+  const [openParallel, setOpenParallel] = useState<{
+    displayRef: string;
+    loading: boolean;
+    lines: string[];
+    error: boolean;
+  } | null>(null);
 
   // צ'אט
   const [chatName, setChatName] = useState<string>(() => localStorage.getItem('havruta_chat_name') || '');
@@ -174,7 +188,7 @@ const StudyRoom = () => {
   const loadText = useCallback(async (ref: string) => {
     setLoadingText(true);
     try {
-      const res = await fetch(`/api/text/${encodeURIComponent(ref)}`);
+      const res = await fetch(`http://localhost:5000/api/text/${encodeURIComponent(ref)}`);
       const data = await res.json();
       setText(data.hebrewText || []);
       setCurrentRef(ref);
@@ -189,25 +203,28 @@ const StudyRoom = () => {
 
   const loadLinks = useCallback(async (ref: string) => {
     try {
-      const res = await fetch(`/api/links/${encodeURIComponent(ref)}`);
+      const res = await fetch(`http://localhost:5000/api/links/${encodeURIComponent(ref)}`);
       if (!res.ok) {
         console.error('[מפרשים] השרת המקומי החזיר סטטוס', res.status);
         setAllLinks([]);
+        setAllParallels([]);
         return;
       }
       const data = await res.json();
-      console.log(`[מפרשים] התקבלו ${(data.links || []).length} מפרשים עבור ${ref}`);
+      console.log(`[מפרשים] התקבלו ${(data.links || []).length} מפרשים ו-${(data.parallels || []).length} מקורות מקבילים עבור ${ref}`);
       setAllLinks(data.links || []);
+      setAllParallels(data.parallels || []);
     } catch (e) {
       console.error('[מפרשים] שגיאה בטעינת מפרשים מהשרת המקומי:', e);
       setAllLinks([]);
+      setAllParallels([]);
     }
   }, []);
 
   const handleOpenPage = async () => {
     if (!input.trim()) return;
     try {
-      const res = await fetch(`/api/resolve-ref/${encodeURIComponent(input)}`);
+      const res = await fetch(`http://localhost:5000/api/resolve-ref/${encodeURIComponent(input)}`);
       const { ref } = await res.json();
       await loadText(ref);
       loadLinks(ref);
@@ -285,6 +302,38 @@ const StudyRoom = () => {
         return Array.from(grouped.values());
       })();
 
+  const lineParallels = !selectedRange || !currentRef
+    ? []
+    : (() => {
+        const seen = new Set<string>();
+        const result: ParallelSource[] = [];
+        for (let i = selectedRange.start; i <= selectedRange.end; i++) {
+          const lineRef = `${currentRef}.${i + 1}`;
+          const matches = allParallels.filter((p) => anchorMatchesLine(p.anchorRef, lineRef));
+          for (const m of matches) {
+            if (!seen.has(m.ref)) {
+              seen.add(m.ref);
+              result.push(m);
+            }
+          }
+        }
+        return result;
+      })();
+
+  // מקור מקביל נפתח בחלון נפרד (מודל), לא בתוך הפאנל - כדי לא לרמוס את מה שלומדים בטקסט הראשי
+  const openParallelSource = async (p: ParallelSource) => {
+    setOpenParallel({ displayRef: p.displayRef, loading: true, lines: [], error: false });
+    try {
+      const res = await fetch(`http://localhost:5000/api/text/${encodeURIComponent(p.ref)}`);
+      const data = await res.json();
+      const lines: string[] = Array.isArray(data.hebrewText) ? data.hebrewText : [];
+      setOpenParallel({ displayRef: p.displayRef, loading: false, lines, error: lines.length === 0 });
+    } catch (e) {
+      console.error('[מקורות מקבילים] שגיאה בטעינת המקור:', e);
+      setOpenParallel({ displayRef: p.displayRef, loading: false, lines: [], error: true });
+    }
+  };
+
   const toggleCommentator = async (c: { en: string; refs: string[] }) => {
     const alreadyOpen = !!openCommentaries[c.en];
 
@@ -302,7 +351,7 @@ const StudyRoom = () => {
     try {
       const results = await Promise.all(
         c.refs.map((ref) =>
-          fetch(`/api/text/${encodeURIComponent(ref)}`).then((r) => r.json())
+          fetch(`http://localhost:5000/api/text/${encodeURIComponent(ref)}`).then((r) => r.json())
         )
       );
       const lines = results.flatMap((d) => (Array.isArray(d.hebrewText) ? d.hebrewText : [d.hebrewText]).filter(Boolean));
@@ -1060,6 +1109,24 @@ const StudyRoom = () => {
                               );
                             })}
                           </div>
+
+                          {lineParallels.length > 0 && (
+                            <div className="mt-5 pt-4 border-t border-hairline">
+                              <span className="block text-xs font-semibold text-brass-dark mb-2">מקורות מקבילים</span>
+                              <div className="flex flex-wrap gap-2">
+                                {lineParallels.map((p) => (
+                                  <button
+                                    key={p.ref}
+                                    onClick={() => openParallelSource(p)}
+                                    className="px-3 py-1.5 rounded-full text-sm font-medium border bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark transition-colors"
+                                    title="נפתח בחלון נפרד, בלי לגעת בטקסט שאתה לומד כרגע"
+                                  >
+                                    {p.displayRef}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </>
                       )}
                     </>
@@ -1081,6 +1148,47 @@ const StudyRoom = () => {
           <HelpCircle size={13} className="text-brass-light" />
           הסבר עם AI
         </button>
+      )}
+
+      {/* מקור מקביל נפתח כאן, בחלון נפרד מעל הכל - הטקסט הראשי שלומדים נשאר בדיוק כמו שהיה מתחת */}
+      {openParallel && (
+        <div
+          className="fixed inset-0 z-[60] bg-ink/40 flex items-center justify-center p-4"
+          onClick={() => setOpenParallel(null)}
+        >
+          <div
+            className="bg-parchment-50 rounded-2xl shadow-2xl border border-hairline max-w-xl w-full max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-hairline bg-parchment-100/60 rounded-t-2xl shrink-0">
+              <h3 className="font-bold text-cover font-classic text-lg truncate">{openParallel.displayRef}</h3>
+              <button
+                onClick={() => setOpenParallel(null)}
+                className="p-1.5 rounded-lg text-ink/40 hover:text-ribbon hover:bg-ribbon/10 transition-colors shrink-0"
+                aria-label="סגור חלון מקור מקביל"
+                title="סגור"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto font-classic text-lg leading-relaxed text-ink">
+              {openParallel.loading ? (
+                <div className="flex items-center gap-2 text-ink/40 text-sm py-8 justify-center font-sans">
+                  <Loader2 size={18} className="animate-spin" />
+                  טוען...
+                </div>
+              ) : openParallel.error || openParallel.lines.length === 0 ? (
+                <div className="text-ink/40 text-sm text-center py-8 font-sans">לא נמצא טקסט זמין עבור מקור זה.</div>
+              ) : (
+                <div className="space-y-2">
+                  {openParallel.lines.map((line, i) => (
+                    <p key={i} dangerouslySetInnerHTML={{ __html: line }} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* אזור הדפסה בלבד - מוסתר במסך, מופיע רק בדיאלוג ההדפסה/יצוא PDF */}

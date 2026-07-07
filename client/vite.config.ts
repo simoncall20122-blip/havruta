@@ -2,12 +2,8 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// https://vite.dev/config/
 export default defineConfig({
-  // הוסף את הבלוק הזה:
-  server: {
-    host: '0.0.0.0', // מאפשר לשרת להאזין לכל כתובת IP ברשת
-    port: 5173,      // וודא שהפורט הזה פתוח בחומת האש במידת הצורך
-  },
   plugins: [
     react(),
     VitePWA({

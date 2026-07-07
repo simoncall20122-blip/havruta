@@ -3,19 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-
-// מגיש את קבצי ה-client הבנויים (client/dist) - כך שרת אחד מריץ הכל
-const clientDistPath = path.join(__dirname, '../../client/dist');
-app.use(express.static(clientDistPath));
 
 interface RoomInfo {
   ref: string; // ref בפורמט ספריא (שימוש פנימי בלבד, לא מוצג למשתמש)
@@ -233,8 +224,27 @@ app.get('/api/links/:ref', async (req, res) => {
       }))
       .filter((l: any) => l.he && l.en && l.ref && l.anchorRef);
 
-    console.log(`[links] ${req.params.ref}: ${data.length} גולמי -> ${links.length} מפרשים אחרי סינון`);
-    res.json({ links });
+    // מקורות מקבילים - מקומות אחרים בש"ס/מדרש/הלכה שדנים באותה סוגיה (כל קטגוריה שאינה "מפרש קלאסי")
+    const parallelsRaw = data
+      .filter((l: any) => l.category && l.category !== 'Commentary')
+      .map((l: any) => ({
+        ref: l.ref || (Array.isArray(l.refs) ? l.refs[1] : undefined) || l.sourceRef,
+        anchorRef: l.anchorRef || (Array.isArray(l.anchorRefExpanded) ? l.anchorRefExpanded[0] : null),
+        category: l.category,
+        displayRef: l.sourceHeRef || l.heRef || l.he_ref || l.ref || l.sourceRef,
+      }))
+      .filter((l: any) => l.ref && l.anchorRef && l.displayRef);
+
+    // דדופ׳ לפי ref, כדי שאותו מקור לא יופיע פעמיים
+    const seenRefs = new Set<string>();
+    const parallels = parallelsRaw.filter((l: any) => {
+      if (seenRefs.has(l.ref)) return false;
+      seenRefs.add(l.ref);
+      return true;
+    });
+
+    console.log(`[links] ${req.params.ref}: ${data.length} גולמי -> ${links.length} מפרשים, ${parallels.length} מקורות מקבילים`);
+    res.json({ links, parallels });
   } catch (e) {
     console.error(`[links] שגיאה בשליפת מפרשים עבור ${req.params.ref}:`, e);
     res.json({ links: [] });
@@ -484,11 +494,6 @@ ${dafContext || '(לא נטען טקסט לדף הנוכחי)'}
       io.to(data.roomId).emit('ai_chat_message', errTurn);
     }
   });
-});
-
-// כל נתיב שלא תפס API - מחזיר את דף ה-client (חיוני ל-SPA routing)
-app.get('*', (req, res) => {
-  res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
