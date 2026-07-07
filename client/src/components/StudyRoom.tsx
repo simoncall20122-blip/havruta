@@ -310,23 +310,18 @@ const StudyRoom = () => {
         return Array.from(grouped.values());
       })();
 
-  const lineParallels = !selectedRange || !currentRef
-    ? []
-    : (() => {
-        const seen = new Set<string>();
-        const result: ParallelSource[] = [];
-        for (let i = selectedRange.start; i <= selectedRange.end; i++) {
-          const lineRef = `${currentRef}.${i + 1}`;
-          const matches = allParallels.filter((p) => anchorMatchesLine(p.anchorRef, lineRef));
-          for (const m of matches) {
-            if (!seen.has(m.ref)) {
-              seen.add(m.ref);
-              result.push(m);
-            }
-          }
-        }
-        return result;
-      })();
+  // מקורות מקבילים שייכים לסוגיה כולה, לא לשורה ספציפית (בניגוד למפרשים) - לכן לא תלוי בבחירת שורה
+  const pageParallels = (() => {
+    const seen = new Set<string>();
+    const result: ParallelSource[] = [];
+    for (const p of allParallels) {
+      if (!seen.has(p.ref)) {
+        seen.add(p.ref);
+        result.push(p);
+      }
+    }
+    return result;
+  })();
 
   // מקור מקביל נפתח כטאב עצמאי (כמו טאב חדש בדפדפן) - אם כבר פתוח, פשוט עוברים אליו
   const openParallelSource = async (p: ParallelSource) => {
@@ -1185,27 +1180,27 @@ const StudyRoom = () => {
                               );
                             })}
                           </div>
-
-                          {lineParallels.length > 0 && (
-                            <div className="mt-5 pt-4 border-t border-hairline">
-                              <span className="block text-xs font-semibold text-brass-dark mb-2">מקורות מקבילים</span>
-                              <div className="flex flex-wrap gap-2">
-                                {lineParallels.map((p) => (
-                                  <button
-                                    key={p.ref}
-                                    onClick={() => openParallelSource(p)}
-                                    className="px-3 py-1.5 rounded-full text-sm font-medium border bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark transition-colors"
-                                    title="נפתח בטאב חדש, בלי לגעת בדף שאתה לומד כרגע"
-                                  >
-                                    {p.displayRef}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
                         </>
                       )}
                     </>
+                  )}
+
+                  {pageParallels.length > 0 && (
+                    <div className={selectedRange !== null ? 'mt-5 pt-4 border-t border-hairline' : ''}>
+                      <span className="block text-xs font-semibold text-brass-dark mb-2">מקורות מקבילים לסוגיה</span>
+                      <div className="flex flex-wrap gap-2">
+                        {pageParallels.map((p) => (
+                          <button
+                            key={p.ref}
+                            onClick={() => openParallelSource(p)}
+                            className="px-3 py-1.5 rounded-full text-sm font-medium border bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark transition-colors"
+                            title="נפתח בטאב חדש, בלי לגעת בדף שאתה לומד כרגע"
+                          >
+                            {p.displayRef}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
