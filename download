@@ -1,0 +1,9 @@
+# מפתח API של Anthropic - נדרש כדי שתכונת "חברותא AI" תעבוד.
+# ניתן ליצור מפתח בכתובת: https://console.anthropic.com/settings/keys
+ANTHROPIC_API_KEY=
+
+# אופציונלי - אם רוצים להשתמש במודל אחר (ברירת מחדל: claude-sonnet-5)
+# ANTHROPIC_MODEL=claude-sonnet-5
+
+# אופציונלי - פורט לשרת (ברירת מחדל: 5000)
+# PORT=5000
