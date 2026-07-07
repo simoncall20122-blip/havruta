@@ -43,7 +43,7 @@ const MesechetTracker = () => {
   const [certTractate, setCertTractate] = useState<Tractate | null>(null);
 
   useEffect(() => {
-    fetch('http://localhost:5000/api/tractates')
+    fetch('/api/tractates')
       .then((res) => res.json())
       .then((data) => setTractates(data.tractates || []))
       .catch((e) => console.error('[מסכתות] שגיאה בטעינת רשימת המסכתות:', e));

@@ -174,7 +174,7 @@ const StudyRoom = () => {
   const loadText = useCallback(async (ref: string) => {
     setLoadingText(true);
     try {
-      const res = await fetch(`http://localhost:5000/api/text/${encodeURIComponent(ref)}`);
+      const res = await fetch(`/api/text/${encodeURIComponent(ref)}`);
       const data = await res.json();
       setText(data.hebrewText || []);
       setCurrentRef(ref);
@@ -189,7 +189,7 @@ const StudyRoom = () => {
 
   const loadLinks = useCallback(async (ref: string) => {
     try {
-      const res = await fetch(`http://localhost:5000/api/links/${encodeURIComponent(ref)}`);
+      const res = await fetch(`/api/links/${encodeURIComponent(ref)}`);
       if (!res.ok) {
         console.error('[מפרשים] השרת המקומי החזיר סטטוס', res.status);
         setAllLinks([]);
@@ -207,7 +207,7 @@ const StudyRoom = () => {
   const handleOpenPage = async () => {
     if (!input.trim()) return;
     try {
-      const res = await fetch(`http://localhost:5000/api/resolve-ref/${encodeURIComponent(input)}`);
+      const res = await fetch(`/api/resolve-ref/${encodeURIComponent(input)}`);
       const { ref } = await res.json();
       await loadText(ref);
       loadLinks(ref);
@@ -302,7 +302,7 @@ const StudyRoom = () => {
     try {
       const results = await Promise.all(
         c.refs.map((ref) =>
-          fetch(`http://localhost:5000/api/text/${encodeURIComponent(ref)}`).then((r) => r.json())
+          fetch(`/api/text/${encodeURIComponent(ref)}`).then((r) => r.json())
         )
       );
       const lines = results.flatMap((d) => (Array.isArray(d.hebrewText) ? d.hebrewText : [d.hebrewText]).filter(Boolean));

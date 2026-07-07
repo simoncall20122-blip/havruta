@@ -149,7 +149,7 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
     setDafYomiLoading(true);
     setDafYomiError('');
     try {
-      const res = await fetch('http://localhost:5000/api/daf-yomi');
+      const res = await fetch('/api/daf-yomi');
       const data = await res.json();
       if (!res.ok || !data.ref) throw new Error('daf_yomi_unavailable');
       pendingAiRef.current = false;
