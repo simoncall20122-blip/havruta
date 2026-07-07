@@ -8,6 +8,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// נתיב בדיקת בריאות עבור Railway
+app.get('/', (_req, res) => {
+  res.status(200).send('Chavruta Digital Server is Online');
+});
+
 interface RoomInfo {
   ref: string; // ref בפורמט ספריא (שימוש פנימי בלבד, לא מוצג למשתמש)
   label: string; // מה שהמשתמש הקליד בפועל (עברית) - זה מה שמוצג בלובי
@@ -65,7 +70,6 @@ interface AiTurn {
 const roomAiChats = new Map<string, AiTurn[]>(); // היסטוריית שיחה עם חברותא ה-AI, לכל חדר
 
 function broadcastRoomsList(io: Server) {
-  // כמה סוקטים מחוברים כרגע בכל חדר (ניהול native של Socket.io) - זה נותן לנו נוכחות בזמן אמת בחינם
   const rooms = Array.from(roomTopics.entries())
     .map(([id, room]) => ({
       id,
@@ -73,11 +77,10 @@ function broadcastRoomsList(io: Server) {
       group: room.group,
       occupancy: io.sockets.adapter.rooms.get(id)?.size || 0,
     }))
-    .filter((r) => r.occupancy > 0); // חדרים ריקים/נטושים לא מוצגים בלובי
+    .filter((r) => r.occupancy > 0);
   io.emit('rooms_list', rooms);
 }
 
-// ממיר אותיות גימטריה עבריות למספר (למשל "קעו" -> 176)
 function hebrewToNumber(str: string): number {
   const values: Record<string, number> = {
     'א': 1, 'ב': 2, 'ג': 3, 'ד': 4, 'ה': 5, 'ו': 6, 'ז': 7, 'ח': 8, 'ט': 9,
@@ -103,17 +106,13 @@ const tractateMapping: Record<string, string> = {
   "תמיד": "Tamid", "נדה": "Niddah",
 };
 
-// רשימת המסכתות (לפי סדר הש"ס) - נשלפת מאותה מיפוי כדי שהמונה במעקב ההתקדמות תמיד יהיה מדויק
 app.get('/api/tractates', (_req, res) => {
   const tractates = Object.entries(tractateMapping).map(([he, en]) => ({ he, en }));
   res.json({ tractates });
 });
 
-// ממיר קלט חופשי (עברית/אנגלית) ל-ref בפורמט ספריא - למשל "נזיר דף ב' עמוד א'" -> "Nazir.2a"
 function resolveRefQuery(rawQuery: string): string {
   const query = rawQuery.trim();
-
-  // תומך גם ב"דף ב" (אות עברית/גימטריה) וגם ב"דף 2" (ספרה), כולל גרש/גרשיים ("ג'", "ג׳", "קע"ו")
   const match = query.match(/^(.+?)\s+דף\s+([\u05D0-\u05EA'"\u05F3\u05F4\u2019\u201D]+|\d+)\s+עמוד\s+([\u05D0-\u05EA])['"\u05F3\u05F4\u2019\u201D]?/);
 
   if (!match) {
@@ -127,7 +126,6 @@ function resolveRefQuery(rawQuery: string): string {
   return `${tractate}.${dafNumber}${side}`;
 }
 
-// שולף טקסט מספריא ומחזיר תמיד מערך שורות מנורמל (ראה הערה על he כמחרוזת/מערך למטה)
 async function fetchSefariaText(ref: string): Promise<string[]> {
   try {
     const response = await fetch(`https://www.sefaria.org/api/texts/${encodeURIComponent(ref)}?context=0`);
@@ -139,7 +137,6 @@ async function fetchSefariaText(ref: string): Promise<string[]> {
   }
 }
 
-// [API Routes] - נשארים אותו דבר
 app.get('/api/resolve-ref/:query', (req, res) => {
   const query = decodeURIComponent(req.params.query);
   const ref = resolveRefQuery(query);
@@ -160,7 +157,6 @@ app.get('/api/text/:ref', async (req, res) => {
   }
 });
 
-// דף היומי של היום - נשלף מלוח השנה של ספריא
 app.get('/api/daf-yomi', async (_req, res) => {
   try {
     const response = await fetch('https://www.sefaria.org/api/calendars');
@@ -177,7 +173,6 @@ app.get('/api/daf-yomi', async (_req, res) => {
       return res.status(404).json({ error: 'not_found' });
     }
 
-    // ה-url של ספריא לפעמים לא כולל את אות העמוד (a/b) - ברירת מחדל לעמוד א' במקרה כזה
     let ref: string = dafYomi.url || dafYomi.ref || '';
     if (ref && !/[ab]$/.test(ref)) ref = `${ref}a`;
 
@@ -190,7 +185,6 @@ app.get('/api/daf-yomi', async (_req, res) => {
   }
 });
 
-// מפרשים (רש"י, תוספות וכו') הזמינים לדף, כולל שיוך מדויק לשורה (anchorRef)
 app.get('/api/links/:ref', async (req, res) => {
   try {
     const url = `https://www.sefaria.org/api/links/${encodeURIComponent(req.params.ref)}?with_text=0`;
@@ -204,19 +198,13 @@ app.get('/api/links/:ref', async (req, res) => {
     const data: any = await response.json();
 
     if (!Array.isArray(data)) {
-      console.error(`[links] ${req.params.ref}: תגובת ספריא לא הייתה מערך. תוכן שהתקבל:`, JSON.stringify(data).slice(0, 500));
+      console.error(`[links] ${req.params.ref}: תגובת ספריא לא הייתה מערך.`);
       return res.json({ links: [] });
     }
 
-    // לוג של רשומה גולמית ראשונה - עוזר לאבחן אם שמות השדות של ספריא השתנו
-    if (data.length > 0) {
-      console.log(`[links] ${req.params.ref}: דוגמת רשומה גולמית ראשונה:`, JSON.stringify(data[0]).slice(0, 400));
-    }
-
     const links = data
-      .filter((l: any) => l.category === 'Commentary') // רק מפרשים קלאסיים, לא תרגומים/מקבילות
+      .filter((l: any) => l.category === 'Commentary')
       .map((l: any) => ({
-        // שם המפרש: תלוי בגרסת ה-API של ספריא - לפעמים collectiveTitle, לפעמים commentator/heCommentator
         he: l.collectiveTitle?.he || l.heCommentator || l.collectiveTitle?.en || l.commentator,
         en: l.collectiveTitle?.en || l.commentator,
         ref: l.ref || (Array.isArray(l.refs) ? l.refs[1] : undefined) || l.sourceRef,
@@ -224,7 +212,6 @@ app.get('/api/links/:ref', async (req, res) => {
       }))
       .filter((l: any) => l.he && l.en && l.ref && l.anchorRef);
 
-    // מקורות מקבילים - מקומות אחרים בש"ס/מדרש/הלכה שדנים באותה סוגיה (כל קטגוריה שאינה "מפרש קלאסי")
     const parallelsRaw = data
       .filter((l: any) => l.category && l.category !== 'Commentary')
       .map((l: any) => ({
@@ -235,7 +222,6 @@ app.get('/api/links/:ref', async (req, res) => {
       }))
       .filter((l: any) => l.ref && l.anchorRef && l.displayRef);
 
-    // דדופ׳ לפי ref, כדי שאותו מקור לא יופיע פעמיים
     const seenRefs = new Set<string>();
     const parallels = parallelsRaw.filter((l: any) => {
       if (seenRefs.has(l.ref)) return false;
@@ -243,7 +229,6 @@ app.get('/api/links/:ref', async (req, res) => {
       return true;
     });
 
-    console.log(`[links] ${req.params.ref}: ${data.length} גולמי -> ${links.length} מפרשים, ${parallels.length} מקורות מקבילים`);
     res.json({ links, parallels });
   } catch (e) {
     console.error(`[links] שגיאה בשליפת מפרשים עבור ${req.params.ref}:`, e);
@@ -255,15 +240,13 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: "*" } });
 
 io.on('connection', (socket) => {
-  // שולח ללקוח החדש את רשימת החדרים הפתוחים ואת לוח מחפשי החברותא ברגע ההתחברות
   broadcastRoomsList(io);
   broadcastBoard(io);
 
-  // התיקון הקריטי: השרת לא טיפל בכלל באירוע create_room
   socket.on('create_room', (data: { topic: string; ref?: string; group?: boolean; dedication?: string }) => {
     const roomId = `room_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const label = String(data.topic || '').trim().slice(0, 100) || 'ברכות דף ב עמוד א';
-    const ref = data.ref ? String(data.ref).trim() : resolveRefQuery(label); // ref מפורש (כמו דף יומי) עוקף את פענוח העברית
+    const ref = data.ref ? String(data.ref).trim() : resolveRefQuery(label);
     const dedication = String(data.dedication || '').trim().slice(0, 150) || undefined;
     roomTopics.set(roomId, { ref, label, group: !!data.group, dedication });
     socket.join(roomId);
@@ -273,13 +256,11 @@ io.on('connection', (socket) => {
 
   socket.on('join_room', (roomId) => {
     socket.join(roomId);
-    broadcastRoomsList(io); // עדכון מיידי של מספר הנוכחים בחדר לכל מי שבלובי
+    broadcastRoomsList(io);
   });
 
   socket.on('disconnect', () => {
-    broadcastRoomsList(io); // מישהו עזב - לעדכן את הנוכחות בלובי
-
-    // ניקוי בקשות שפורסמו על ידי מי שהתנתק, כדי שלא יישארו בקשות "מתות" בלוח
+    broadcastRoomsList(io);
     let boardChanged = false;
     for (const [id, post] of boardPosts.entries()) {
       if (post.posterSocketId === socket.id) {
@@ -290,7 +271,6 @@ io.on('connection', (socket) => {
     if (boardChanged) broadcastBoard(io);
   });
 
-  // לוח "מחפש חברותא" - פרסום בקשה פתוחה
   socket.on('board_post', (data: { name: string; topic: string; when: string }) => {
     const topic = String(data.topic || '').trim().slice(0, 100);
     if (!topic) return;
@@ -314,10 +294,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // מישהו לוחץ "בוא נלמד" על בקשה פתוחה - פותח חדר ומחבר את שני הצדדים
   socket.on('board_claim', (data: { postId: string }) => {
     const post = boardPosts.get(data.postId);
-    if (!post) return; // הבקשה כבר נתפסה או הוסרה
+    if (!post) return;
     boardPosts.delete(data.postId);
     broadcastBoard(io);
 
@@ -325,11 +304,10 @@ io.on('connection', (socket) => {
     const ref = resolveRefQuery(post.topic);
     roomTopics.set(roomId, { ref, label: post.topic, group: false });
     socket.join(roomId);
-    socket.emit('room_created', roomId); // התופס עצמו
-    io.to(post.posterSocketId).emit('board_matched', { roomId, topic: post.topic }); // המפרסם המקורי, אם עדיין מחובר
+    socket.emit('room_created', roomId);
+    io.to(post.posterSocketId).emit('board_matched', { roomId, topic: post.topic });
   });
 
-  // התיקון הקריטי: השרת עונה ללקוח שמבקש את מצב החדר
   socket.on('request_room_status', (roomId) => {
     const room = roomTopics.get(roomId) || { ref: 'Berakhot.2a', label: 'ברכות דף ב עמוד א', group: false };
     socket.emit('page_changed', { ref: room.ref });
@@ -339,7 +317,6 @@ io.on('connection', (socket) => {
     socket.emit('schedule_updated', roomSchedule.get(roomId) || null);
   });
 
-  // קביעת הלימוד הבא - משותף לשני הצדדים בחדר, כדי שהתיאום יהיה אמיתי ולא רק תזכורת אישית
   socket.on('schedule_next', (data: { roomId: string; when: number; note: string }) => {
     const when = Number(data.when);
     if (!Number.isFinite(when) || when <= 0) return;
@@ -372,12 +349,10 @@ io.on('connection', (socket) => {
 
   socket.on('change_page', (data: { roomId: string; ref: string }) => {
     const existing = roomTopics.get(data.roomId);
-    roomTopics.set(data.roomId, { ref: data.ref, label: existing?.label || data.ref, group: existing?.group || false }); // שמירה בזיכרון השרת, בלי לאבד את הכותרת/סוג החדר
+    roomTopics.set(data.roomId, { ref: data.ref, label: existing?.label || data.ref, group: existing?.group || false });
     io.to(data.roomId).emit('page_changed', { ref: data.ref });
   });
 
-  // סיגנלינג לשיחת וידאו (WebRTC) - השרת רק מעביר הודעות בין שני הצדדים בחדר,
-  // לא נוגע בזרם המדיה עצמו (זה עובר ישירות בין הדפדפנים)
   socket.on('video_offer', (data: { roomId: string; offer: unknown }) => {
     socket.to(data.roomId).emit('video_offer', { offer: data.offer });
   });
@@ -394,11 +369,10 @@ io.on('connection', (socket) => {
     socket.to(data.roomId).emit('video_hangup');
   });
 
-  // לוח שרטוט - התיקון הקריטי: השרת מעולם לא טיפל באירועי draw_line/clear_board
   socket.on('draw_line', (data: { roomId: string; prevPoint: Point | null; currentPoint: Point; color: string }) => {
     const history = roomBoards.get(data.roomId) || [];
     history.push({ prevPoint: data.prevPoint, currentPoint: data.currentPoint, color: data.color });
-    if (history.length > 5000) history.shift(); // הגבלת זיכרון לחדר ארוך-טווח
+    if (history.length > 5000) history.shift();
     roomBoards.set(data.roomId, history);
     socket.to(data.roomId).emit('draw_line', {
       prevPoint: data.prevPoint,
@@ -412,12 +386,10 @@ io.on('connection', (socket) => {
     socket.to(data.roomId).emit('clear_board');
   });
 
-  // נשלח כשהלוח נטען - כדי שמי שפותח את הטאב מאוחר יותר יראה מה שכבר צויר
   socket.on('request_board_state', (roomId: string) => {
     socket.emit('board_history', roomBoards.get(roomId) || []);
   });
 
-  // חברותא AI - שיחה משותפת לכל מי שבחדר, עם הקשר הדף הנוכחי
   socket.on('ai_message', async (data: { roomId: string; name: string; message: string }) => {
     const message = String(data.message || '').slice(0, 2000).trim();
     if (!message) return;
