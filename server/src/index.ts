@@ -3,6 +3,14 @@ import express from 'express';
 import cors from 'cors';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+// בפריסה עם שירות Railway אחד, ה-build הראשי בונה גם client וגם server -
+// השרת חייב להגיש בעצמו את קבצי ה-client הבנויים (זה מה שהיה חסר לגמרי עד עכשיו)
+const clientDistPath = path.join(__dirname, '../../client/dist');
 
 const app = express();
 app.use(cors());
@@ -494,6 +502,16 @@ ${dafContext || '(לא נטען טקסט לדף הנוכחי)'}
       io.to(data.roomId).emit('ai_chat_message', errTurn);
     }
   });
+});
+
+// הגשת ה-client הבנוי (React) - חייב לבוא אחרי כל ה-API routes, כדי שהם יזכו לעדיפות
+app.use(express.static(clientDistPath));
+
+app.get('*', (req, res, next) => {
+  // בקשות ל-API או ל-Socket.io לא אמורות להגיע לכאן בכלל (יש להן routes משלהן),
+  // אבל ההגנה הזו מונעת מהן ליפול בטעות ל-fallback של index.html
+  if (req.path.startsWith('/api/') || req.path.startsWith('/socket.io/')) return next();
+  res.sendFile(path.join(clientDistPath, 'index.html'));
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
