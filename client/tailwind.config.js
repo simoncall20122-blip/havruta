@@ -8,7 +8,7 @@ export default {
     extend: {
       fontFamily: {
         sans: ['Heebo', 'sans-serif'], // גופן ברירת המחדל לממשק
-        classic: ['"Frank Ruhl Libre"', 'serif'], // גופן קלאסי לטקסט הלימוד
+        classic: ['"David Libre"', 'serif'], // גופן קלאסי לטקסט הלימוד - שונה במתכוון מ-Taamey Frank שספריא משתמשת בו
       },
       colors: {
         // פלטת "כריכת ספר לימוד": ירוק כריכה, פליז, פרגמנט, וסרט סימניה
