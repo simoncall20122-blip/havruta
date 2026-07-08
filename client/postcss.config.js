@@ -1,2 +1,6 @@
-VITE_API_URL=
-VITE_GOOGLE_CLIENT_ID=
+export default {
+  plugins: {
+    "@tailwindcss/postcss": {},
+    autoprefixer: {},
+  },
+}
