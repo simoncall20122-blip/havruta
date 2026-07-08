@@ -1,10 +1,14 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { initDb } from './db.js';
+import { attachAuthRoutes, getUserFromToken } from './auth.js';
+import { attachPaypalRoutes } from './paypal.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,8 +17,12 @@ const __dirname = path.dirname(__filename);
 const clientDistPath = path.join(__dirname, '../../client/dist');
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
+app.use(cookieParser());
 app.use(express.json());
+
+attachAuthRoutes(app);
+attachPaypalRoutes(app);
 
 interface RoomInfo {
   ref: string; // ref בפורמט ספריא (שימוש פנימי בלבד, לא מוצג למשתמש)
@@ -64,6 +72,13 @@ interface ScheduledSession {
   note: string;
 }
 const roomSchedule = new Map<string, ScheduledSession>(); // הלימוד הבא הקבוע לכל חדר (משותף לשני הצדדים)
+
+interface RoomBookmark {
+  ref: string; // הדף שבו עצרו
+  line: number | null; // שורה ספציפית (0-based), אם סימנו
+  ts: number;
+}
+const roomBookmarks = new Map<string, RoomBookmark>(); // "כאן עצרנו" - משותף לשני הצדדים בחדר
 
 interface AiTurn {
   role: 'user' | 'assistant';
@@ -232,15 +247,30 @@ app.get('/api/links/:ref', async (req, res) => {
       }))
       .filter((l: any) => l.he && l.en && l.ref && l.anchorRef);
 
+    // בורר רק ערך שהוא בעצם מחרוזת שם אמיתית (לא מספר/מזהה פנימי של ספריא בטעות)
+    const safeGroupName = (...candidates: any[]): string => {
+      for (const c of candidates) {
+        if (typeof c === 'string' && c.trim() && !/^\d+$/.test(c.trim())) return c.trim();
+      }
+      return 'מקור נוסף';
+    };
+
     // מקורות מקבילים - מקומות אחרים בש"ס/מדרש/הלכה שדנים באותה סוגיה (כל קטגוריה שאינה "מפרש קלאסי")
-    const parallelsRaw = data
-      .filter((l: any) => l.category && l.category !== 'Commentary')
-      .map((l: any) => ({
-        ref: l.ref || (Array.isArray(l.refs) ? l.refs[1] : undefined) || l.sourceRef,
-        anchorRef: l.anchorRef || (Array.isArray(l.anchorRefExpanded) ? l.anchorRefExpanded[0] : null),
-        category: l.category,
-        displayRef: l.sourceHeRef || l.heRef || l.he_ref || l.ref || l.sourceRef,
-      }))
+    const nonCommentary = data.filter((l: any) => l.category && l.category !== 'Commentary');
+    if (nonCommentary.length > 0) {
+      console.log(`[links] ${req.params.ref}: דוגמת מקור מקביל גולמי:`, JSON.stringify(nonCommentary[0]).slice(0, 400));
+    }
+
+    const parallelsRaw = nonCommentary.map((l: any) => ({
+      ref: l.ref || (Array.isArray(l.refs) ? l.refs[1] : undefined) || l.sourceRef,
+      anchorRef: l.anchorRef || (Array.isArray(l.anchorRefExpanded) ? l.anchorRefExpanded[0] : null),
+      category: l.category,
+      displayRef: l.sourceHeRef || l.heRef || l.he_ref || l.ref || l.sourceRef,
+      // שם החיבור עצמו (למשל "טור", "רמב"ם") - לצורך קיבוץ מקורות מאותו חיבור יחד.
+      // נופל בבטחה לקטגוריה הכללית (למשל "הלכה") אם אין שם חיבור ספציפי אמין
+      groupHe: safeGroupName(l.collectiveTitle?.he, l.index_title_he, l.category),
+      groupEn: safeGroupName(l.collectiveTitle?.en, l.index_title, l.category),
+    }))
       .filter((l: any) => l.ref && l.anchorRef && l.displayRef);
 
     // דדופ׳ לפי ref, כדי שאותו מקור לא יופיע פעמיים
@@ -345,6 +375,7 @@ io.on('connection', (socket) => {
     socket.emit('chat_history', roomChats.get(roomId) || []);
     socket.emit('ai_history', roomAiChats.get(roomId) || []);
     socket.emit('schedule_updated', roomSchedule.get(roomId) || null);
+    socket.emit('bookmark_updated', roomBookmarks.get(roomId) || null);
   });
 
   // קביעת הלימוד הבא - משותף לשני הצדדים בחדר, כדי שהתיאום יהיה אמיתי ולא רק תזכורת אישית
@@ -359,6 +390,19 @@ io.on('connection', (socket) => {
   socket.on('schedule_cancel', (roomId: string) => {
     roomSchedule.delete(roomId);
     io.to(roomId).emit('schedule_updated', null);
+  });
+
+  // "כאן עצרנו" - סימון מקום עצירה משותף, כדי לחזור אליו בפעם הבאה
+  socket.on('set_bookmark', (data: { roomId: string; ref: string; line: number | null }) => {
+    if (!data.ref) return;
+    const bookmark: RoomBookmark = { ref: data.ref, line: data.line ?? null, ts: Date.now() };
+    roomBookmarks.set(data.roomId, bookmark);
+    io.to(data.roomId).emit('bookmark_updated', bookmark);
+  });
+
+  socket.on('clear_bookmark', (roomId: string) => {
+    roomBookmarks.delete(roomId);
+    io.to(roomId).emit('bookmark_updated', null);
   });
 
   socket.on('chat_message', (data: { roomId: string; name: string; text: string }) => {
@@ -426,9 +470,21 @@ io.on('connection', (socket) => {
   });
 
   // חברותא AI - שיחה משותפת לכל מי שבחדר, עם הקשר הדף הנוכחי
-  socket.on('ai_message', async (data: { roomId: string; name: string; message: string }) => {
+  socket.on('ai_message', async (data: { roomId: string; name: string; message: string; token?: string }) => {
     const message = String(data.message || '').slice(0, 2000).trim();
     if (!message) return;
+
+    // חסימה מיידית - חברותא AI פתוחה רק למשתמשים עם מנוי פעיל
+    const user = data.token ? await getUserFromToken(data.token) : null;
+    if (!user || user.subscriptionStatus !== 'active') {
+      socket.emit('ai_blocked', {
+        reason: !user ? 'not_logged_in' : 'not_subscribed',
+        message: !user
+          ? 'צריך להתחבר ולהיות במנוי פעיל כדי לדבר עם חברותא ה-AI.'
+          : 'חברותא ה-AI זמינה רק למשתמשים עם מנוי פעיל.',
+      });
+      return;
+    }
 
     const history = roomAiChats.get(data.roomId) || [];
     const userTurn: AiTurn = { role: 'user', content: message, name: String(data.name || 'לומד').slice(0, 40) };
@@ -515,4 +571,6 @@ app.get('*', (req, res, next) => {
 });
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
-httpServer.listen(PORT, () => console.log(`Server running on ${PORT}`));
+initDb().finally(() => {
+  httpServer.listen(PORT, () => console.log(`Server running on ${PORT}`));
+});
