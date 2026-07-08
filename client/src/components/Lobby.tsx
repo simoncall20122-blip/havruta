@@ -17,6 +17,7 @@ import {
   Send,
 } from 'lucide-react';
 import MesechetTracker from './MesechetTracker';
+import StudyLogView from './StudyLogView';
 
 interface ActiveRoom {
   id: string;
@@ -322,6 +323,7 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
           </div>
 
           <MesechetTracker />
+          <StudyLogView />
 
           {/* לוח מחפש חברותא - במקום להפנות החוצה, מוצא לך חברותא בתוך האפליקציה עצמה */}
           <div className="bg-white rounded-2xl border border-hairline mb-8 overflow-hidden">

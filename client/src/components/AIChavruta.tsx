@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { socket } from '../socket';
+import { useAuth } from '../authContext';
 import { Sparkles, Send, Loader2, FileText, HelpCircle } from 'lucide-react';
 
 interface AIChavrutaProps {
@@ -18,9 +19,11 @@ const SUMMARY_PROMPT =
 const QUIZ_PROMPT = 'תן לי 2-3 שאלות הבנה קצרות על הסוגיה הזו, בלי התשובות - אני אנסה לענות ואתה תגיד לי אם צדקתי.';
 
 const AIChavruta = ({ roomId, chatName }: AIChavrutaProps) => {
+  const { token } = useAuth();
   const [messages, setMessages] = useState<AiTurn[]>([]);
   const [draft, setDraft] = useState('');
   const [waiting, setWaiting] = useState(false);
+  const [blockedMessage, setBlockedMessage] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -36,9 +39,15 @@ const AIChavruta = ({ roomId, chatName }: AIChavrutaProps) => {
       if (turn.role === 'assistant') setWaiting(false);
     });
 
+    socket.on('ai_blocked', (data: { reason: string; message: string }) => {
+      setWaiting(false);
+      setBlockedMessage(data.message);
+    });
+
     return () => {
       socket.off('ai_history');
       socket.off('ai_chat_message');
+      socket.off('ai_blocked');
     };
   }, [roomId]);
 
@@ -47,7 +56,8 @@ const AIChavruta = ({ roomId, chatName }: AIChavrutaProps) => {
   }, [messages, waiting]);
 
   const sendMessage = (message: string) => {
-    socket.emit('ai_message', { roomId, name: chatName || 'לומד', message });
+    setBlockedMessage('');
+    socket.emit('ai_message', { roomId, name: chatName || 'לומד', message, token });
     setWaiting(true);
   };
 
@@ -123,6 +133,11 @@ const AIChavruta = ({ roomId, chatName }: AIChavrutaProps) => {
         )}
         <div ref={endRef} />
       </div>
+      {blockedMessage && (
+        <div className="px-3 py-2 bg-ribbon/10 border-t border-ribbon/20 text-xs text-ribbon-dark text-center shrink-0">
+          {blockedMessage}
+        </div>
+      )}
       <div className="p-2.5 border-t border-hairline flex gap-2 shrink-0">
         <input
           value={draft}

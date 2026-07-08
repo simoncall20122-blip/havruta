@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { socket } from '../socket';
 import { API_URL } from '../apiBase';
+import { logDafStudied, numberToHebrew } from '../studyLog';
 import {
   BookOpen,
   ArrowRight,
@@ -27,12 +28,14 @@ import {
   QrCode,
   Heart,
   CalendarPlus,
+  Bookmark,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import Whiteboard from './Whiteboard';
 import type { WhiteboardHandle } from './Whiteboard';
 import VideoCall from './VideoCall';
 import AIChavruta from './AIChavruta';
+import AuthGate from './AuthGate';
 
 interface CommentaryLink {
   he: string;
@@ -46,6 +49,8 @@ interface ParallelSource {
   anchorRef: string;
   category: string;
   displayRef: string;
+  groupHe: string;
+  groupEn: string;
 }
 
 interface SourceTab {
@@ -161,6 +166,7 @@ const StudyRoom = () => {
   const [dedication, setDedication] = useState<string | null>(null);
   const [nextSession, setNextSession] = useState<{ when: number; note: string } | null>(null);
   const [showSchedule, setShowSchedule] = useState(false);
+  const [bookmark, setBookmark] = useState<{ ref: string; line: number | null; ts: number } | null>(null);
   const [scheduleWhen, setScheduleWhen] = useState('');
   const [scheduleNote, setScheduleNote] = useState('');
   const [copied, setCopied] = useState(false);
@@ -177,6 +183,7 @@ const StudyRoom = () => {
 
   // מפרשים
   const [allLinks, setAllLinks] = useState<CommentaryLink[]>([]);
+  const [tractateEnToHe, setTractateEnToHe] = useState<Record<string, string>>({});
   const [allParallels, setAllParallels] = useState<ParallelSource[]>([]);
   const [selectedRange, setSelectedRange] = useState<{ start: number; end: number } | null>(null);
   const [openCommentaries, setOpenCommentaries] = useState<Record<string, CommentaryState>>({});
@@ -203,6 +210,12 @@ const StudyRoom = () => {
       setCurrentRef(ref);
       setSelectedRange(null);
       setOpenCommentaries({});
+
+      // תיעוד לימוד אוטומטי - נרשם כ"נלמד" ברגע שהדף נטען בהצלחה בחדר
+      const parsed = parseDafRef(ref);
+      if (parsed && data.hebrewText?.length > 0) {
+        logDafStudied(parsed.tractate, parsed.daf, parsed.side);
+      }
     } catch (e) {
       console.error('שגיאה בטעינת הטקסט:', e);
     } finally {
@@ -324,6 +337,18 @@ const StudyRoom = () => {
     return result;
   })();
 
+  // קיבוץ המקורות המקבילים לפי החיבור המשותף (למשל "הטור") - כדי שאפשר יהיה לפתוח קבוצה שלמה ביחד
+  const groupedParallels = (() => {
+    const groups = new Map<string, { groupHe: string; groupEn: string; sources: ParallelSource[] }>();
+    for (const p of pageParallels) {
+      const existing = groups.get(p.groupEn);
+      if (existing) existing.sources.push(p);
+      else groups.set(p.groupEn, { groupHe: p.groupHe, groupEn: p.groupEn, sources: [p] });
+    }
+    return Array.from(groups.values()).sort((a, b) => b.sources.length - a.sources.length);
+  })();
+  const [openParallelGroups, setOpenParallelGroups] = useState<Record<string, boolean>>({});
+
   // מקור מקביל נפתח כטאב עצמאי (כמו טאב חדש בדפדפן) - אם כבר פתוח, פשוט עוברים אליו
   const openParallelSource = async (p: ParallelSource) => {
     const existing = sourceTabs.find((t) => t.ref === p.ref);
@@ -439,6 +464,27 @@ const StudyRoom = () => {
     return days === 1 ? 'מחר' : `בעוד ${days} ימים`;
   };
 
+  // "כאן עצרנו" - מסמן את הדף (והשורה, אם נבחרה) הנוכחיים כמקום העצירה המשותף
+  const handleSetBookmark = () => {
+    if (!currentRef) return;
+    const line = selectedRange ? selectedRange.start : null;
+    socket.emit('set_bookmark', { roomId, ref: currentRef, line });
+  };
+
+  const handleGoToBookmark = async () => {
+    if (!bookmark) return;
+    await loadText(bookmark.ref);
+    loadLinks(bookmark.ref);
+    socket.emit('change_page', { roomId, ref: bookmark.ref });
+    if (bookmark.line !== null) {
+      setSelectedRange({ start: bookmark.line, end: bookmark.line });
+    }
+  };
+
+  const handleClearBookmark = () => {
+    socket.emit('clear_bookmark', roomId);
+  };
+
   // יצוא PDF - דרך דיאלוג ההדפסה של הדפדפן (תומך בעברית/RTL בצורה מושלמת, בלי צורך בספריית PDF כבדה)
   const handleExportPdf = () => {
     setBoardSnapshot(activeTab === 'whiteboard' ? whiteboardRef.current?.getSnapshot() || null : null);
@@ -485,6 +531,28 @@ const StudyRoom = () => {
     setChatDraft('');
   };
 
+  // טוען את מיפוי שמות המסכתות (אנגלית -> עברית) כדי להציג את מראה המקום בעברית בכותרת
+  useEffect(() => {
+    fetch(`${API_URL}/api/tractates`)
+      .then((res) => res.json())
+      .then((data) => {
+        const map: Record<string, string> = {};
+        for (const t of data.tractates || []) map[t.en] = t.he;
+        setTractateEnToHe(map);
+      })
+      .catch((e) => console.error('[מסכתות] שגיאה בטעינת שמות מסכתות:', e));
+  }, []);
+
+  // ממיר ref טכני (כמו "Chullin.69a") לתצוגה עברית ("חולין דף סט עמוד א")
+  const formatRefHe = (ref: string) => {
+    const parsed = parseDafRef(ref);
+    if (!parsed) return ref;
+    const heName = tractateEnToHe[parsed.tractate] || parsed.tractate;
+    const sideHe = parsed.side === 'a' ? 'א' : 'ב';
+    return `${heName} דף ${numberToHebrew(parsed.daf)} עמוד ${sideHe}`;
+  };
+  const displayRef = formatRefHe(currentRef);
+
   useEffect(() => {
     socket.emit('join_room', roomId);
     socket.emit('request_room_status', roomId);
@@ -512,10 +580,15 @@ const StudyRoom = () => {
       setNextSession(session);
     });
 
+    socket.on('bookmark_updated', (bm: { ref: string; line: number | null; ts: number } | null) => {
+      setBookmark(bm);
+    });
+
     return () => {
       socket.off('page_changed');
       socket.off('room_meta');
       socket.off('schedule_updated');
+      socket.off('bookmark_updated');
       socket.off('chat_history');
       socket.off('chat_message');
     };
@@ -589,8 +662,8 @@ const StudyRoom = () => {
 
           <div className="flex items-center gap-2 shrink-0 pl-3 border-l border-white/10">
             <BookOpen size={20} className="text-brass-light" />
-            <div className="font-classic text-lg font-bold text-parchment-50" dir="ltr">
-              {currentRef || '...'}
+            <div className="font-classic text-lg font-bold text-parchment-50">
+              {displayRef || '...'}
             </div>
           </div>
 
@@ -610,6 +683,16 @@ const StudyRoom = () => {
             </button>
           </div>
 
+          <button
+            onClick={handleSetBookmark}
+            disabled={!currentRef}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/15 disabled:opacity-40 disabled:cursor-not-allowed text-parchment-50 rounded-lg text-sm font-medium transition-colors shrink-0"
+            title="סמן כאן שעצרנו, כדי לחזור לזה בפעם הבאה"
+            aria-label="סמן כאן שעצרנו"
+          >
+            <Bookmark size={15} className="text-brass-light" />
+            כאן עצרנו
+          </button>
           <button
             onClick={() => setShowSchedule((v) => !v)}
             className="flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/15 text-parchment-50 rounded-lg text-sm font-medium transition-colors shrink-0"
@@ -719,6 +802,22 @@ const StudyRoom = () => {
         </div>
       )}
 
+      {bookmark && bookmark.ref !== currentRef && (
+        <div className="bg-ribbon/5 border-b border-ribbon/20 px-4 sm:px-6 py-2 flex items-center justify-center gap-3 text-sm text-ink shrink-0 flex-wrap">
+          <Bookmark size={14} className="text-ribbon shrink-0" fill="currentColor" />
+          <span>
+            עצרתם כאן: <span>{formatRefHe(bookmark.ref)}</span>
+            {bookmark.line !== null ? ` (שורה ${bookmark.line + 1})` : ''}
+          </span>
+          <button onClick={handleGoToBookmark} className="text-xs font-semibold text-ribbon-dark hover:text-ribbon underline underline-offset-2">
+            חזרו לשם
+          </button>
+          <button onClick={handleClearBookmark} className="text-xs text-ink/40 hover:text-ribbon">
+            נקה
+          </button>
+        </div>
+      )}
+
       {dedication && (
         <div className="bg-brass/10 border-b border-brass/20 px-4 sm:px-6 py-2 flex items-center justify-center gap-2 text-sm text-brass-dark shrink-0">
           <Heart size={13} className="shrink-0" />
@@ -773,7 +872,9 @@ const StudyRoom = () => {
               {leftTab === 'video' && !isGroupRoom ? (
                 <VideoCall roomId={roomId} />
               ) : leftTab === 'ai' ? (
-                <AIChavruta roomId={roomId} chatName={chatName} />
+                <AuthGate>
+                  <AIChavruta roomId={roomId} chatName={chatName} />
+                </AuthGate>
               ) : (
               <>
               {!chatName ? (
@@ -1134,34 +1235,32 @@ const StudyRoom = () => {
                             : 'לא נמצא מפרש ישיר לשורה זו, נסה שורה סמוכה.'}
                         </div>
                       ) : (
-                        <>
-                          <div className="flex flex-wrap gap-2 mb-4">
-                            {lineCommentators.map((c) => (
-                              <button
-                                key={c.en}
-                                onClick={() => toggleCommentator(c)}
-                                className={`px-3 py-1.5 rounded-full text-sm font-medium border transition-colors ${
-                                  openCommentaries[c.en]
-                                    ? 'bg-brass/15 border-brass text-brass-dark'
-                                    : 'bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark'
-                                }`}
-                              >
-                                {c.he}
-                              </button>
-                            ))}
-                          </div>
-
-                          <div className="space-y-3">
-                            {Object.entries(openCommentaries).map(([en, state]) => {
-                              const c = lineCommentators.find((x) => x.en === en);
-                              return (
-                                <div key={en} className="border border-hairline rounded-xl overflow-hidden">
-                                  <div className="bg-parchment-100/60 px-4 py-2 text-sm font-bold text-cover border-b border-hairline">
-                                    {c?.he || en}
-                                  </div>
-                                  <div className="p-4 font-classic text-lg leading-relaxed text-ink max-h-64 overflow-y-auto">
+                        <div className="space-y-2">
+                          {lineCommentators.map((c) => {
+                            const state = openCommentaries[c.en];
+                            const isOpen = !!state;
+                            return (
+                              <div key={c.en} className="border border-hairline rounded-xl overflow-hidden">
+                                <button
+                                  onClick={() => toggleCommentator(c)}
+                                  className="w-full flex items-center justify-between gap-2 px-3.5 py-2 bg-parchment-50 hover:bg-brass/5 transition-colors text-sm font-semibold text-ink/80"
+                                >
+                                  <span className="flex items-center gap-2">
+                                    <span
+                                      className={`flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold shrink-0 transition-colors ${
+                                        isOpen ? 'bg-brass text-cover-dark' : 'bg-brass/15 text-brass-dark'
+                                      }`}
+                                    >
+                                      {isOpen ? '−' : '+'}
+                                    </span>
+                                    {c.he}
+                                  </span>
+                                  <span className="text-xs font-normal text-ink/40">{c.refs.length}</span>
+                                </button>
+                                {isOpen && (
+                                  <div className="p-4 font-classic text-lg leading-relaxed text-ink max-h-64 overflow-y-auto bg-white">
                                     {state.loading ? (
-                                      <div className="flex items-center gap-2 text-ink/40 text-sm py-4 justify-center">
+                                      <div className="flex items-center gap-2 text-ink/40 text-sm py-4 justify-center font-sans">
                                         <Loader2 size={16} className="animate-spin" />
                                         טוען...
                                       </div>
@@ -1177,29 +1276,56 @@ const StudyRoom = () => {
                                       </div>
                                     )}
                                   </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </>
                   )}
 
-                  {pageParallels.length > 0 && (
+                  {groupedParallels.length > 0 && (
                     <div className={selectedRange !== null ? 'mt-5 pt-4 border-t border-hairline' : ''}>
                       <span className="block text-xs font-semibold text-brass-dark mb-2">מקורות מקבילים לסוגיה</span>
-                      <div className="flex flex-wrap gap-2">
-                        {pageParallels.map((p) => (
-                          <button
-                            key={p.ref}
-                            onClick={() => openParallelSource(p)}
-                            className="px-3 py-1.5 rounded-full text-sm font-medium border bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark transition-colors"
-                            title="נפתח בטאב חדש, בלי לגעת בדף שאתה לומד כרגע"
-                          >
-                            {p.displayRef}
-                          </button>
-                        ))}
+                      <div className="space-y-2">
+                        {groupedParallels.map((g) => {
+                          const isOpen = !!openParallelGroups[g.groupEn];
+                          return (
+                            <div key={g.groupEn} className="border border-hairline rounded-xl overflow-hidden">
+                              <button
+                                onClick={() => setOpenParallelGroups((prev) => ({ ...prev, [g.groupEn]: !prev[g.groupEn] }))}
+                                className="w-full flex items-center justify-between gap-2 px-3.5 py-2 bg-parchment-50 hover:bg-brass/5 transition-colors text-sm font-semibold text-ink/80"
+                              >
+                                <span className="flex items-center gap-2">
+                                  <span
+                                    className={`flex items-center justify-center w-5 h-5 rounded-full text-xs font-bold shrink-0 transition-colors ${
+                                      isOpen ? 'bg-brass text-cover-dark' : 'bg-brass/15 text-brass-dark'
+                                    }`}
+                                  >
+                                    {isOpen ? '−' : '+'}
+                                  </span>
+                                  {g.groupHe}
+                                </span>
+                                <span className="text-xs font-normal text-ink/40">{g.sources.length}</span>
+                              </button>
+                              {isOpen && (
+                                <div className="flex flex-wrap gap-2 p-3 bg-white">
+                                  {g.sources.map((p) => (
+                                    <button
+                                      key={p.ref}
+                                      onClick={() => openParallelSource(p)}
+                                      className="px-3 py-1.5 rounded-full text-sm font-medium border bg-parchment-50 border-hairline text-ink/70 hover:border-brass hover:text-brass-dark transition-colors"
+                                      title="נפתח בטאב חדש, בלי לגעת בדף שאתה לומד כרגע"
+                                    >
+                                      {p.displayRef}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -1224,7 +1350,7 @@ const StudyRoom = () => {
 
       {/* אזור הדפסה בלבד - מוסתר במסך, מופיע רק בדיאלוג ההדפסה/יצוא PDF */}
       <div id="print-area" className="hidden print:block p-8 font-classic text-ink" dir="rtl">
-        <h1 className="text-2xl font-bold mb-1" dir="ltr">{currentRef}</h1>
+        <h1 className="text-2xl font-bold mb-1">{displayRef}</h1>
         <p className="text-sm text-ink/60 mb-6">חברותא דיגיטלית — סיכום לימוד</p>
 
         {text.length > 0 && (

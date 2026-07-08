@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Lobby from './components/Lobby';
 import StudyRoom from './components/StudyRoom';
+import { AuthProvider } from './authContext';
 
 function App() {
   const [currentRoom, setCurrentRoom] = useState<string | null>(null);
@@ -22,13 +23,15 @@ function App() {
   };
 
   return (
-    <div className="App">
-      {currentRoom ? (
-        <StudyRoom />
-      ) : (
-        <Lobby onJoinRoom={handleJoinRoom} />
-      )}
-    </div>
+    <AuthProvider>
+      <div className="App">
+        {currentRoom ? (
+          <StudyRoom />
+        ) : (
+          <Lobby onJoinRoom={handleJoinRoom} />
+        )}
+      </div>
+    </AuthProvider>
   );
 }
 
