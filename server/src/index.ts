@@ -219,31 +219,56 @@ app.get('/api/text/:ref', async (req, res) => {
 });
 
 // דף היומי של היום - נשלף מלוח השנה של ספריא
+// שולף את דף היומי של היום מספריא - פונקציה משותפת בין /api/daf-yomi ובין חדר "דף היומי" הציבורי
+async function fetchTodaysDafYomi(): Promise<{ ref: string; label: string } | null> {
+  const response = await fetch('https://www.sefaria.org/api/calendars');
+  if (!response.ok) {
+    console.error(`[daf-yomi] ספריא החזירה סטטוס ${response.status}`);
+    return null;
+  }
+  const data: any = await response.json();
+  const items = Array.isArray(data.calendar_items) ? data.calendar_items : [];
+  const dafYomi = items.find((it: any) => it.title?.en === 'Daf Yomi');
+  if (!dafYomi) {
+    console.error('[daf-yomi] לא נמצא פריט "Daf Yomi" בתגובת ספריא');
+    return null;
+  }
+  // ה-url של ספריא לפעמים לא כולל את אות העמוד (a/b) - ברירת מחדל לעמוד א' במקרה כזה
+  let ref: string = dafYomi.url || dafYomi.ref || '';
+  if (ref && !/[ab]$/.test(ref)) ref = `${ref}a`;
+  const label = dafYomi.displayValue?.he || dafYomi.displayValue?.en || ref;
+  return { ref, label };
+}
+
 app.get('/api/daf-yomi', async (_req, res) => {
   try {
-    const response = await fetch('https://www.sefaria.org/api/calendars');
-    if (!response.ok) {
-      console.error(`[daf-yomi] ספריא החזירה סטטוס ${response.status}`);
-      return res.status(502).json({ error: 'sefaria_unavailable' });
-    }
-    const data: any = await response.json();
-    const items = Array.isArray(data.calendar_items) ? data.calendar_items : [];
-    const dafYomi = items.find((it: any) => it.title?.en === 'Daf Yomi');
-
-    if (!dafYomi) {
-      console.error('[daf-yomi] לא נמצא פריט "Daf Yomi" בתגובת ספריא');
-      return res.status(404).json({ error: 'not_found' });
-    }
-
-    // ה-url של ספריא לפעמים לא כולל את אות העמוד (a/b) - ברירת מחדל לעמוד א' במקרה כזה
-    let ref: string = dafYomi.url || dafYomi.ref || '';
-    if (ref && !/[ab]$/.test(ref)) ref = `${ref}a`;
-
-    const label = dafYomi.displayValue?.he || dafYomi.displayValue?.en || ref;
-    console.log(`[daf-yomi] היום: ${ref} (${label})`);
-    res.json({ ref, label });
+    const dafYomi = await fetchTodaysDafYomi();
+    if (!dafYomi) return res.status(502).json({ error: 'sefaria_unavailable' });
+    console.log(`[daf-yomi] היום: ${dafYomi.ref} (${dafYomi.label})`);
+    res.json(dafYomi);
   } catch (e) {
     console.error('[daf-yomi] שגיאה:', e);
+    res.status(502).json({ error: 'sefaria_unavailable' });
+  }
+});
+
+// חדר "דף היומי" ציבורי - קבוע לכל היום הזה, פתוח לכל מי שרוצה להיכנס בלי שידוך מראש.
+// ה-roomId נגזר מהתאריך עצמו, כך שכל מי שמבקש "את החדר הציבורי של היום" מקבל בדיוק אותו חדר
+app.get('/api/public-room', async (_req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const roomId = `public_dafyomi_${today}`;
+    let room = roomTopics.get(roomId);
+    if (!room) {
+      const dafYomi = await fetchTodaysDafYomi();
+      if (!dafYomi) return res.status(502).json({ error: 'sefaria_unavailable' });
+      room = { ref: dafYomi.ref, label: `דף היומי הציבורי - ${dafYomi.label}`, group: true };
+      roomTopics.set(roomId, room);
+      totalRoomsCreatedCounter += 1;
+    }
+    res.json({ roomId, ref: room.ref, label: room.label });
+  } catch (e) {
+    console.error('[public-room] שגיאה:', e);
     res.status(502).json({ error: 'sefaria_unavailable' });
   }
 });
