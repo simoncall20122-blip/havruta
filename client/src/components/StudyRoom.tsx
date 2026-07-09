@@ -29,6 +29,7 @@ import {
   Heart,
   CalendarPlus,
   Bookmark,
+  Highlighter,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import Whiteboard from './Whiteboard';
@@ -152,6 +153,15 @@ function saveNote(ref: string, text: string) {
 
 const stripTags = (html: string) => html.replace(/<[^>]*>/g, '');
 
+// ממיר צבע hex לגוון שקוף (rgba), לצביעת רקע ההדגשה של המרקר החי
+const hexToRgba = (hex: string, alpha: number) => {
+  const clean = hex.replace('#', '');
+  const r = parseInt(clean.substring(0, 2), 16);
+  const g = parseInt(clean.substring(2, 4), 16);
+  const b = parseInt(clean.substring(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 const StudyRoom = () => {
   const [roomId] = useState(new URLSearchParams(window.location.search).get('room') || 'default');
   const [input, setInput] = useState('שבת דף ב עמוד א');
@@ -173,9 +183,15 @@ const StudyRoom = () => {
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [markerOn, setMarkerOn] = useState(false);
+  const [markerColor, setMarkerColor] = useState(() => localStorage.getItem('havruta_marker_color') || '#ec4899');
+  const [showMarkerColors, setShowMarkerColors] = useState(false);
+  const [partnerMarker, setPartnerMarker] = useState<{ line: number | null; name: string; color?: string } | null>(null);
+  const [hoveredLine, setHoveredLine] = useState<number | null>(null);
+  const lastMarkerEmitRef = useRef(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatch, setCurrentMatch] = useState(0);
-  const lineElsRef = useRef<(HTMLParagraphElement | null)[]>([]);
+  const lineElsRef = useRef<(HTMLDivElement | null)[]>([]);
   const whiteboardRef = useRef<WhiteboardHandle>(null);
   const [boardSnapshot, setBoardSnapshot] = useState<string | null>(null);
   const [wordPopup, setWordPopup] = useState<{ text: string; top: number; left: number } | null>(null);
@@ -210,6 +226,7 @@ const StudyRoom = () => {
       setText(data.hebrewText || []);
       setCurrentRef(ref);
       setSelectedRange(null);
+      setPartnerMarker(null);
       setOpenCommentaries({});
 
       // תיעוד לימוד אוטומטי - נרשם כ"נלמד" ברגע שהדף נטען בהצלחה בחדר
@@ -508,6 +525,52 @@ const StudyRoom = () => {
     setWordPopup({ text: selectedText, top: rect.top - 40, left: rect.left });
   };
 
+  // "מרקר חי" - בזמן שהמצב פעיל, נע העכבר על שורה משדר לצד השני בזמן אמת איזו שורה מוצבעת
+  const handleMarkerMouseMove = (e: React.MouseEvent) => {
+    if (!markerOn) return;
+    const y = e.clientY;
+    let foundLine: number | null = null;
+    for (let i = 0; i < lineElsRef.current.length; i++) {
+      const el = lineElsRef.current[i];
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (y >= r.top && y <= r.bottom) {
+        foundLine = i;
+        break;
+      }
+    }
+    if (foundLine === hoveredLine) return;
+    setHoveredLine(foundLine);
+
+    const now = Date.now();
+    if (now - lastMarkerEmitRef.current < 80) return; // מיתון - לא לשדר יותר מדי לעיתים קרובות
+    lastMarkerEmitRef.current = now;
+    socket.emit('marker_move', { roomId, line: foundLine, name: chatName || 'לומד', color: markerColor });
+  };
+
+  const handleMarkerMouseLeave = () => {
+    if (!markerOn) return;
+    setHoveredLine(null);
+    socket.emit('marker_move', { roomId, line: null, name: chatName || 'לומד', color: markerColor });
+  };
+
+  const toggleMarkerMode = () => {
+    setMarkerOn((v) => {
+      const next = !v;
+      if (!next) {
+        setHoveredLine(null);
+        socket.emit('marker_move', { roomId, line: null, name: chatName || 'לומד', color: markerColor });
+      }
+      return next;
+    });
+  };
+
+  const handlePickMarkerColor = (color: string) => {
+    setMarkerColor(color);
+    localStorage.setItem('havruta_marker_color', color);
+    setShowMarkerColors(false);
+  };
+
   const handleExplainSelection = () => {
     if (!wordPopup) return;
     socket.emit('ai_message', {
@@ -594,11 +657,16 @@ const StudyRoom = () => {
       setBookmark(bm);
     });
 
+    socket.on('marker_move', (data: { line: number | null; name: string; color?: string }) => {
+      setPartnerMarker(data.line === null ? null : data);
+    });
+
     return () => {
       socket.off('page_changed');
       socket.off('room_meta');
       socket.off('schedule_updated');
       socket.off('bookmark_updated');
+      socket.off('marker_move');
       socket.off('chat_history');
       socket.off('chat_message');
     };
@@ -1043,6 +1111,41 @@ const StudyRoom = () => {
                         <Search size={14} />
                         חיפוש
                       </button>
+                      <button
+                        onClick={toggleMarkerMode}
+                        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          markerOn
+                            ? 'bg-ribbon/15 text-ribbon-dark'
+                            : 'text-ink/60 hover:bg-ribbon/10 hover:text-ribbon-dark'
+                        }`}
+                        aria-label="מרקר חי - מסמן שורה לחברותא בזמן אמת"
+                        title="מרקר חי - הזז עכבר על שורה כדי להראות אותה לחברותא בזמן אמת"
+                      >
+                        <Highlighter size={14} />
+                        מרקר{markerOn ? ' פעיל' : ''}
+                      </button>
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowMarkerColors((v) => !v)}
+                          className="w-6 h-6 rounded-full border-2 border-white shadow shrink-0"
+                          style={{ backgroundColor: markerColor }}
+                          aria-label="בחר צבע מרקר"
+                          title="בחר צבע מרקר"
+                        />
+                        {showMarkerColors && (
+                          <div className="absolute z-20 top-full right-0 mt-1 bg-white border border-hairline rounded-xl shadow-lg p-2 flex gap-1.5">
+                            {['#ec4899', '#0ea5e9', '#10b981', '#f97316', '#8b5cf6', '#ef4444'].map((c) => (
+                              <button
+                                key={c}
+                                onClick={() => handlePickMarkerColor(c)}
+                                className={`w-6 h-6 rounded-full transition-transform ${markerColor === c ? 'scale-125 ring-2 ring-offset-1 ring-ink/30' : ''}`}
+                                style={{ backgroundColor: c }}
+                                aria-label={`צבע מרקר ${c}`}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1">
                       <button
@@ -1133,19 +1236,27 @@ const StudyRoom = () => {
                   <div
                     ref={textScrollRef}
                     onMouseUp={handleTextSelection}
+                    onMouseMove={handleMarkerMouseMove}
+                    onMouseLeave={handleMarkerMouseLeave}
                     className="flex-1 overflow-y-auto scroll-parchment min-h-0 px-6 sm:px-8 pb-6 pt-2 font-classic text-xl leading-loose space-y-1 text-ink"
                   >
                     {text.map((line, i) => {
                       const isMatch = searchMatches.includes(i);
                       const isCurrentMatch = isMatch && searchMatches[currentMatch] === i;
                       const isInRange = !!selectedRange && i >= selectedRange.start && i <= selectedRange.end;
+                      const isPartnerMarked = partnerMarker?.line === i;
+                      const markerHex = partnerMarker?.color || '#ec4899';
+                      const markerBg = hexToRgba(markerHex, 0.18);
                       return (
-                        <p
+                        <div
                           key={i}
                           ref={(el) => { lineElsRef.current[i] = el; }}
                           onClick={(e) => handleSelectLine(i, e.shiftKey)}
+                          style={isPartnerMarked ? { backgroundColor: markerBg, borderColor: markerHex } : undefined}
                           className={`relative px-3 py-2 rounded-lg cursor-pointer transition-colors border-r-[3px] ${
-                            isCurrentMatch
+                            isPartnerMarked
+                              ? 'animate-pulse'
+                              : isCurrentMatch
                               ? 'bg-brass/20 border-brass'
                               : isMatch
                               ? 'bg-brass/10 border-brass/40'
@@ -1153,8 +1264,18 @@ const StudyRoom = () => {
                               ? 'bg-ribbon/[0.07] border-ribbon'
                               : 'border-transparent hover:bg-brass/5 hover:border-brass/30'
                           }`}
-                          dangerouslySetInnerHTML={{ __html: line }}
-                        />
+                        >
+                          {isPartnerMarked && (
+                            <span
+                              style={{ backgroundColor: markerHex }}
+                              className="absolute -top-2.5 right-3 flex items-center gap-1 text-white text-xs font-bold px-2 py-0.5 rounded-full shadow whitespace-nowrap font-sans"
+                            >
+                              <Highlighter size={11} />
+                              {partnerMarker!.name}
+                            </span>
+                          )}
+                          <p dangerouslySetInnerHTML={{ __html: line }} />
+                        </div>
                       );
                     })}
                   </div>
