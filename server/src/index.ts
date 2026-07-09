@@ -405,6 +405,12 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('bookmark_updated', null);
   });
 
+  // "מרקר חי" - הצבעה בזמן אמת על שורה בעזרת העכבר, כדי להסב תשומת לב/לסמן קטע לדיון.
+  // אין צורך בשמירה בשרת - זה זמני לגמרי, רק מעביר לצד השני בחדר
+  socket.on('marker_move', (data: { roomId: string; line: number | null; name: string; color?: string }) => {
+    socket.to(data.roomId).emit('marker_move', { line: data.line, name: data.name, color: data.color });
+  });
+
   socket.on('chat_message', (data: { roomId: string; name: string; text: string }) => {
     const text = String(data.text || '').slice(0, 2000).trim();
     if (!text) return;
