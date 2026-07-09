@@ -37,6 +37,7 @@ interface BoardPost {
   name: string;
   topic: string;
   when: string;
+  level: string;
   posterSocketId: string;
   ts: number;
 }
@@ -329,15 +330,18 @@ io.on('connection', (socket) => {
   });
 
   // לוח "מחפש חברותא" - פרסום בקשה פתוחה
-  socket.on('board_post', (data: { name: string; topic: string; when: string }) => {
+  socket.on('board_post', (data: { name: string; topic: string; when: string; level?: string }) => {
     const topic = String(data.topic || '').trim().slice(0, 100);
     if (!topic) return;
+    const allowedLevels = ['מתחיל', 'בינוני', 'מתקדם'];
+    const level = allowedLevels.includes(String(data.level)) ? String(data.level) : '';
     const id = `post_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     boardPosts.set(id, {
       id,
       name: String(data.name || 'לומד').trim().slice(0, 40),
       topic,
       when: String(data.when || '').trim().slice(0, 60),
+      level,
       posterSocketId: socket.id,
       ts: Date.now(),
     });
