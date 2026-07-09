@@ -525,10 +525,8 @@ const StudyRoom = () => {
     setWordPopup({ text: selectedText, top: rect.top - 40, left: rect.left });
   };
 
-  // "מרקר חי" - בזמן שהמצב פעיל, נע העכבר על שורה משדר לצד השני בזמן אמת איזו שורה מוצבעת
-  const handleMarkerMouseMove = (e: React.MouseEvent) => {
-    if (!markerOn) return;
-    const y = e.clientY;
+  // "מרקר חי" - בזמן שהמצב פעיל, נע העכבר/אצבע על שורה משדר לצד השני בזמן אמת איזו שורה מוצבעת
+  const updateMarkerAtY = (y: number) => {
     let foundLine: number | null = null;
     for (let i = 0; i < lineElsRef.current.length; i++) {
       const el = lineElsRef.current[i];
@@ -548,7 +546,26 @@ const StudyRoom = () => {
     socket.emit('marker_move', { roomId, line: foundLine, name: chatName || 'לומד', color: markerColor });
   };
 
+  const handleMarkerMouseMove = (e: React.MouseEvent) => {
+    if (!markerOn) return;
+    updateMarkerAtY(e.clientY);
+  };
+
   const handleMarkerMouseLeave = () => {
+    if (!markerOn) return;
+    setHoveredLine(null);
+    socket.emit('marker_move', { roomId, line: null, name: chatName || 'לומד', color: markerColor });
+  };
+
+  // תמיכה במסכי מגע (טלפון/טאבלט) - אין שם אירועי עכבר, אז גוררים אצבע במקום להזיז עכבר
+  const handleMarkerTouchMove = (e: React.TouchEvent) => {
+    if (!markerOn) return;
+    e.preventDefault(); // מונע גלילת הדף תוך כדי סימון עם האצבע
+    const touch = e.touches[0];
+    if (touch) updateMarkerAtY(touch.clientY);
+  };
+
+  const handleMarkerTouchEnd = () => {
     if (!markerOn) return;
     setHoveredLine(null);
     socket.emit('marker_move', { roomId, line: null, name: chatName || 'לומד', color: markerColor });
@@ -1238,6 +1255,9 @@ const StudyRoom = () => {
                     onMouseUp={handleTextSelection}
                     onMouseMove={handleMarkerMouseMove}
                     onMouseLeave={handleMarkerMouseLeave}
+                    onTouchMove={handleMarkerTouchMove}
+                    onTouchEnd={handleMarkerTouchEnd}
+                    style={markerOn ? { userSelect: 'none', touchAction: 'none' } : undefined}
                     className="flex-1 overflow-y-auto scroll-parchment min-h-0 px-6 sm:px-8 pb-6 pt-2 font-classic text-xl leading-loose space-y-1 text-ink"
                   >
                     {text.map((line, i) => {
@@ -1245,17 +1265,21 @@ const StudyRoom = () => {
                       const isCurrentMatch = isMatch && searchMatches[currentMatch] === i;
                       const isInRange = !!selectedRange && i >= selectedRange.start && i <= selectedRange.end;
                       const isPartnerMarked = partnerMarker?.line === i;
-                      const markerHex = partnerMarker?.color || '#ec4899';
+                      const isSelfMarked = markerOn && hoveredLine === i && !isPartnerMarked;
+                      const markerHex = isSelfMarked ? markerColor : partnerMarker?.color || '#ec4899';
                       const markerBg = hexToRgba(markerHex, 0.18);
+                      const showMarkerStyle = isPartnerMarked || isSelfMarked;
                       return (
                         <div
                           key={i}
                           ref={(el) => { lineElsRef.current[i] = el; }}
                           onClick={(e) => handleSelectLine(i, e.shiftKey)}
-                          style={isPartnerMarked ? { backgroundColor: markerBg, borderColor: markerHex } : undefined}
+                          style={showMarkerStyle ? { backgroundColor: markerBg, borderColor: markerHex } : undefined}
                           className={`relative px-3 py-2 rounded-lg cursor-pointer transition-colors border-r-[3px] ${
                             isPartnerMarked
                               ? 'animate-pulse'
+                              : isSelfMarked
+                              ? ''
                               : isCurrentMatch
                               ? 'bg-brass/20 border-brass'
                               : isMatch
