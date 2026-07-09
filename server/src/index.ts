@@ -6,7 +6,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { initDb } from './db.js';
+import { initDb, pool } from './db.js';
 import { attachAuthRoutes, getUserFromToken } from './auth.js';
 import { attachPaypalRoutes } from './paypal.js';
 
@@ -23,6 +23,36 @@ app.use(express.json());
 
 attachAuthRoutes(app);
 attachPaypalRoutes(app);
+
+// דשבורד ניהול - מוגן בסוד משותף (ADMIN_SECRET), לא הרשאת משתמש רגילה. מיועד לבעל האתר בלבד
+app.get('/api/admin/stats', async (req, res) => {
+  const secret = process.env.ADMIN_SECRET;
+  if (!secret || req.query.secret !== secret) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  let totalUsers = 0;
+  let activeSubscriptions = 0;
+  if (pool) {
+    try {
+      const usersResult = await pool.query('SELECT COUNT(*) FROM users');
+      totalUsers = parseInt(usersResult.rows[0].count, 10);
+      const subsResult = await pool.query("SELECT COUNT(*) FROM users WHERE subscription_status = 'active'");
+      activeSubscriptions = parseInt(subsResult.rows[0].count, 10);
+    } catch (e) {
+      console.error('[admin] שגיאה בשליפת נתוני משתמשים:', e);
+    }
+  }
+
+  res.json({
+    totalRoomsCreated: totalRoomsCreatedCounter,
+    totalAiMessages: totalAiMessagesCounter,
+    currentActiveRooms: roomTopics.size,
+    totalUsers,
+    activeSubscriptions,
+    dbConfigured: !!pool,
+  });
+});
 
 interface RoomInfo {
   ref: string; // ref בפורמט ספריא (שימוש פנימי בלבד, לא מוצג למשתמש)
@@ -80,6 +110,10 @@ interface RoomBookmark {
   ts: number;
 }
 const roomBookmarks = new Map<string, RoomBookmark>(); // "כאן עצרנו" - משותף לשני הצדדים בחדר
+
+// מונים מצטברים לדשבורד ניהול (לא יורדים כשחדר/הודעה "נעלמים", רק עולים)
+let totalRoomsCreatedCounter = 0;
+let totalAiMessagesCounter = 0;
 
 interface AiTurn {
   role: 'user' | 'assistant';
@@ -305,6 +339,7 @@ io.on('connection', (socket) => {
     const ref = data.ref ? String(data.ref).trim() : resolveRefQuery(label); // ref מפורש (כמו דף יומי) עוקף את פענוח העברית
     const dedication = String(data.dedication || '').trim().slice(0, 150) || undefined;
     roomTopics.set(roomId, { ref, label, group: !!data.group, dedication });
+    totalRoomsCreatedCounter += 1;
     socket.join(roomId);
     socket.emit('room_created', roomId);
     broadcastRoomsList(io);
@@ -357,7 +392,7 @@ io.on('connection', (socket) => {
   });
 
   // מישהו לוחץ "בוא נלמד" על בקשה פתוחה - פותח חדר ומחבר את שני הצדדים
-  socket.on('board_claim', (data: { postId: string }) => {
+  socket.on('board_claim', (data: { postId: string; name?: string }) => {
     const post = boardPosts.get(data.postId);
     if (!post) return; // הבקשה כבר נתפסה או הוסרה
     boardPosts.delete(data.postId);
@@ -366,9 +401,14 @@ io.on('connection', (socket) => {
     const roomId = `room_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const ref = resolveRefQuery(post.topic);
     roomTopics.set(roomId, { ref, label: post.topic, group: false });
+    totalRoomsCreatedCounter += 1;
     socket.join(roomId);
     socket.emit('room_created', roomId); // התופס עצמו
-    io.to(post.posterSocketId).emit('board_matched', { roomId, topic: post.topic }); // המפרסם המקורי, אם עדיין מחובר
+    io.to(post.posterSocketId).emit('board_matched', {
+      roomId,
+      topic: post.topic,
+      partnerName: String(data.name || 'לומד').trim().slice(0, 40),
+    }); // המפרסם המקורי, אם עדיין מחובר
   });
 
   // התיקון הקריטי: השרת עונה ללקוח שמבקש את מצב החדר
@@ -456,6 +496,11 @@ io.on('connection', (socket) => {
     socket.to(data.roomId).emit('video_hangup');
   });
 
+  // "תפוס תשומת לב" בשיחת וידאו - איתות חד-פעמי לצד השני, בלי שמירה בשרת
+  socket.on('grab_attention', (data: { roomId: string }) => {
+    socket.to(data.roomId).emit('grab_attention');
+  });
+
   // לוח שרטוט - התיקון הקריטי: השרת מעולם לא טיפל באירועי draw_line/clear_board
   socket.on('draw_line', (data: { roomId: string; prevPoint: Point | null; currentPoint: Point; color: string }) => {
     const history = roomBoards.get(data.roomId) || [];
@@ -504,6 +549,7 @@ io.on('connection', (socket) => {
     const userTurn: AiTurn = { role: 'user', content: message, name: String(data.name || 'לומד').slice(0, 40) };
     history.push(userTurn);
     roomAiChats.set(data.roomId, history);
+    totalAiMessagesCounter += 1;
     io.to(data.roomId).emit('ai_chat_message', userTurn);
 
     if (!process.env.ANTHROPIC_API_KEY) {

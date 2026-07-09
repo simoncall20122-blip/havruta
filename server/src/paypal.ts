@@ -49,6 +49,7 @@ export function attachPaypalRoutes(app: Express) {
       clientId: PAYPAL_CLIENT_ID,
       planId: PAYPAL_PLAN_ID,
       configured: !!(PAYPAL_CLIENT_ID && PAYPAL_PLAN_ID),
+      donationConfigured: !!(PAYPAL_CLIENT_ID && PAYPAL_CLIENT_SECRET),
     });
   });
 
@@ -75,6 +76,53 @@ export function attachPaypalRoutes(app: Express) {
       res.json({ ok: false, status: sub.status });
     } catch (e) {
       console.error('[paypal] שגיאה באישור מנוי:', e);
+      res.status(500).json({ error: 'server_error' });
+    }
+  });
+
+  // תרומה חד-פעמית (לא מנוי) - יוצר הזמנת תשלום ב-PayPal לסכום חופשי
+  app.post('/api/paypal/create-order', async (req, res) => {
+    try {
+      const amount = Number(req.body?.amount);
+      if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'invalid_amount' });
+
+      const accessToken = await getPaypalAccessToken();
+      if (!accessToken) return res.status(502).json({ error: 'paypal_unavailable' });
+
+      const orderRes = await fetch(`${PAYPAL_BASE}/v2/checkout/orders`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          intent: 'CAPTURE',
+          purchase_units: [{ amount: { currency_code: 'USD', value: amount.toFixed(2) }, description: 'תרומה לחברותא דיגיטלית' }],
+        }),
+      });
+      if (!orderRes.ok) return res.status(502).json({ error: 'paypal_order_failed' });
+      const order: any = await orderRes.json();
+      res.json({ orderId: order.id });
+    } catch (e) {
+      console.error('[paypal] שגיאה ביצירת הזמנת תרומה:', e);
+      res.status(500).json({ error: 'server_error' });
+    }
+  });
+
+  app.post('/api/paypal/capture-order', async (req, res) => {
+    try {
+      const { orderId } = req.body as { orderId?: string };
+      if (!orderId) return res.status(400).json({ error: 'missing_order_id' });
+
+      const accessToken = await getPaypalAccessToken();
+      if (!accessToken) return res.status(502).json({ error: 'paypal_unavailable' });
+
+      const captureRes = await fetch(`${PAYPAL_BASE}/v2/checkout/orders/${orderId}/capture`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      });
+      if (!captureRes.ok) return res.status(502).json({ error: 'paypal_capture_failed' });
+      const result: any = await captureRes.json();
+      res.json({ ok: result.status === 'COMPLETED', status: result.status });
+    } catch (e) {
+      console.error('[paypal] שגיאה באישור תרומה:', e);
       res.status(500).json({ error: 'server_error' });
     }
   });
