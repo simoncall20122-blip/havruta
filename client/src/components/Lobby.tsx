@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { socket } from '../socket';
 import { API_URL } from '../apiBase';
+import { numberToHebrew } from '../studyLog';
 import {
   BookOpen,
   Users,
@@ -15,9 +16,13 @@ import {
   Heart,
   MessageSquarePlus,
   Send,
+  Shuffle,
 } from 'lucide-react';
 import MesechetTracker from './MesechetTracker';
 import StudyLogView from './StudyLogView';
+import StudyStats from './StudyStats';
+import TractatePacing from './TractatePacing';
+import DueForReview from './DueForReview';
 
 interface ActiveRoom {
   id: string;
@@ -31,6 +36,7 @@ interface BoardPost {
   name: string;
   topic: string;
   when: string;
+  level?: string;
   posterSocketId: string;
   ts: number;
 }
@@ -88,6 +94,7 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
   const [myRooms, setMyRooms] = useState<MyRoom[]>(() => loadMyRooms());
   const [dafYomiLoading, setDafYomiLoading] = useState(false);
   const [dafYomiError, setDafYomiError] = useState('');
+  const [tractates, setTractates] = useState<{ he: string; en: string }[]>([]);
   const [roomMode, setRoomMode] = useState<'pair' | 'group'>('pair');
   const [dedication, setDedication] = useState('');
   const [showDedication, setShowDedication] = useState(false);
@@ -95,8 +102,16 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
   const [showPostForm, setShowPostForm] = useState(false);
   const [postTopic, setPostTopic] = useState('');
   const [postWhen, setPostWhen] = useState('');
+  const [postLevel, setPostLevel] = useState(() => localStorage.getItem('havruta_profile_level') || '');
   const pendingAiRef = useRef(false);
   const pendingLabelRef = useRef('');
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/tractates`)
+      .then((res) => res.json())
+      .then((data) => setTractates(data.tractates || []))
+      .catch((e) => console.error('[מסכתות] שגיאה בטעינת רשימת המסכתות:', e));
+  }, []);
 
   useEffect(() => {
     socket.on('rooms_list', (roomsList: ActiveRoom[]) => {
@@ -165,6 +180,30 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
     }
   };
 
+  // "תפתיע אותי" - בוחר מסכת ודף אקראיים לגילוי. טווח 2-40 בטוח כמעט לכל מסכת;
+  // אם במקרה נחתים על דף שלא קיים, זה כבר מטופל בהודעה ברורה בחדר הלימוד עצמו
+  const handleSurpriseMe = () => {
+    if (tractates.length === 0) return;
+    const tractate = tractates[Math.floor(Math.random() * tractates.length)];
+    const daf = 2 + Math.floor(Math.random() * 39);
+    const side: 'a' | 'b' = Math.random() < 0.5 ? 'a' : 'b';
+    const ref = `${tractate.en}.${daf}${side}`;
+    const label = `${tractate.he} דף ${numberToHebrew(daf)} עמוד ${side === 'a' ? 'א' : 'ב'}`;
+    pendingAiRef.current = false;
+    pendingLabelRef.current = label;
+    socket.emit('create_room', { topic: label, ref, group: roomMode === 'group', dedication });
+  };
+
+  // "כדאי לחזור על זה" - פותח חדר ישירות על דף שכבר נלמד בעבר ומגיע הזמן לחזור עליו
+  const handleReviewDaf = (entry: { tractateEn: string; daf: number; side: 'a' | 'b' }) => {
+    const heName = tractates.find((t) => t.en === entry.tractateEn)?.he || entry.tractateEn;
+    const label = `${heName} דף ${numberToHebrew(entry.daf)} עמוד ${entry.side === 'a' ? 'א' : 'ב'}`;
+    const ref = `${entry.tractateEn}.${entry.daf}${entry.side}`;
+    pendingAiRef.current = false;
+    pendingLabelRef.current = label;
+    socket.emit('create_room', { topic: label, ref, group: false });
+  };
+
   const handleJoinExisting = (room: ActiveRoom) => {
     setMyRooms(persistMyRoom(room.id, room.topic));
     onJoinRoom(room.id);
@@ -183,7 +222,8 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
   const handlePostRequest = () => {
     if (!postTopic.trim()) return;
     const name = localStorage.getItem('havruta_chat_name') || 'לומד';
-    socket.emit('board_post', { name, topic: postTopic.trim(), when: postWhen.trim() });
+    if (postLevel) localStorage.setItem('havruta_profile_level', postLevel);
+    socket.emit('board_post', { name, topic: postTopic.trim(), when: postWhen.trim(), level: postLevel });
     setPostTopic('');
     setPostWhen('');
     setShowPostForm(false);
@@ -219,6 +259,23 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
         </div>
 
         <div className="p-8">
+          {/* המשך מאיפה שהפסקת - החדר האחרון שהיית בו, בולט בראש הלובי */}
+          {myRooms.length > 0 && (
+            <button
+              onClick={() => handleJoinMyRoom(myRooms[0])}
+              className="w-full flex items-center justify-between gap-3 mb-6 p-4 bg-cover hover:bg-cover-dark rounded-2xl text-right transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <History size={20} className="text-brass-light shrink-0" />
+                <div className="min-w-0">
+                  <div className="text-xs text-parchment-50/70">המשך מאיפה שהפסקת</div>
+                  <strong className="block font-classic text-lg text-parchment-50 truncate">{myRooms[0].label}</strong>
+                </div>
+              </div>
+              <ArrowLeft size={20} className="text-brass-light shrink-0" />
+            </button>
+          )}
+
           {/* פתיחת חדר חדש */}
           <div className="bg-white p-6 rounded-2xl border border-hairline mb-8">
             <h3 className="text-lg font-bold text-cover mb-4 flex items-center gap-2">
@@ -311,6 +368,15 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
               </button>
               <span className="hidden sm:inline text-ink/20">•</span>
               <button
+                onClick={handleSurpriseMe}
+                disabled={tractates.length === 0}
+                className="flex items-center gap-1.5 text-sm font-semibold text-brass-dark hover:text-brass disabled:opacity-50 transition-colors"
+              >
+                <Shuffle size={15} />
+                תפתיע אותי
+              </button>
+              <span className="hidden sm:inline text-ink/20">•</span>
+              <button
                 onClick={handleStartWithAI}
                 disabled={!newTopic.trim()}
                 className="flex items-center gap-1.5 text-sm font-semibold text-brass-dark hover:text-brass disabled:text-ink/30 disabled:cursor-not-allowed transition-colors"
@@ -322,8 +388,14 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
             {dafYomiError && <p className="text-sm text-ribbon-dark mt-2">{dafYomiError}</p>}
           </div>
 
+          <DueForReview
+            tractateEnToHe={Object.fromEntries(tractates.map((t) => [t.en, t.he]))}
+            onReview={handleReviewDaf}
+          />
+          <StudyStats />
           <MesechetTracker />
           <StudyLogView />
+          <TractatePacing tractates={tractates} />
 
           {/* לוח מחפש חברותא - במקום להפנות החוצה, מוצא לך חברותא בתוך האפליקציה עצמה */}
           <div className="bg-white rounded-2xl border border-hairline mb-8 overflow-hidden">
@@ -351,6 +423,22 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
                   aria-label="מה תרצה ללמוד"
                   className="w-full px-3 py-2 text-sm bg-white border border-hairline rounded-lg focus:outline-none focus:ring-2 focus:ring-brass"
                 />
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-ink/50 shrink-0">רמה (אופציונלי):</span>
+                  {['מתחיל', 'בינוני', 'מתקדם'].map((lvl) => (
+                    <button
+                      key={lvl}
+                      onClick={() => setPostLevel((prev) => (prev === lvl ? '' : lvl))}
+                      className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
+                        postLevel === lvl
+                          ? 'bg-brass/15 border-brass text-brass-dark'
+                          : 'bg-white border-hairline text-ink/50 hover:border-brass/40'
+                      }`}
+                    >
+                      {lvl}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex gap-2">
                   <input
                     value={postWhen}
@@ -394,6 +482,11 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <strong className="text-ink font-classic">{post.topic}</strong>
+                            {post.level && (
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-brass/10 text-brass-dark">
+                                {post.level}
+                              </span>
+                            )}
                             {post.when && <span className="text-xs text-ink/40">· {post.when}</span>}
                           </div>
                           <span className="text-xs text-ink/40">{post.name}{isMine ? ' (אתה)' : ''}</span>

@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { socket } from '../socket';
 import { API_URL } from '../apiBase';
 import { logDafStudied, numberToHebrew } from '../studyLog';
+import { addStudySeconds, incrementSessionCount, formatTimer } from '../studyTimer';
 import {
   BookOpen,
   ArrowRight,
@@ -30,6 +31,7 @@ import {
   CalendarPlus,
   Bookmark,
   Highlighter,
+  Clock,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import Whiteboard from './Whiteboard';
@@ -184,6 +186,9 @@ const StudyRoom = () => {
   const [noteText, setNoteText] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [markerOn, setMarkerOn] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const unsavedSecondsRef = useRef(0);
+  const sessionCountedRef = useRef(false);
   const [markerColor, setMarkerColor] = useState(() => localStorage.getItem('havruta_marker_color') || '#ec4899');
   const [showMarkerColors, setShowMarkerColors] = useState(false);
   const [partnerMarker, setPartnerMarker] = useState<{ line: number | null; name: string; color?: string } | null>(null);
@@ -310,6 +315,35 @@ const StudyRoom = () => {
   const canGoPrev = !!parsedCurrent && !(parsedCurrent.side === 'a' && parsedCurrent.daf <= 2);
   const canGoNext = !!parsedCurrent;
 
+  // קיצורי מקלדת: חיצים לניווט בין דפים, / לחיפוש, Esc לסגירת פאנלים - רק כשלא מקלידים בשדה טקסט
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      const isTyping = ['INPUT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable;
+      if (isTyping) return;
+
+      if (e.key === 'ArrowRight' && canGoPrev) {
+        e.preventDefault();
+        handleNavigateDaf(-1);
+      } else if (e.key === 'ArrowLeft' && canGoNext) {
+        e.preventDefault();
+        handleNavigateDaf(1);
+      } else if (e.key === '/') {
+        e.preventDefault();
+        setSearchOpen(true);
+      } else if (e.key === 'Escape') {
+        setSearchOpen(false);
+        setNoteOpen(false);
+        setShowSchedule(false);
+        setQrDataUrl(null);
+        setShowMarkerColors(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canGoPrev, canGoNext, currentRef]);
+
   // סימון/ביטול סימון שורה (או טווח שורות עם Shift) לניתוח מפרשים
   const handleSelectLine = (index: number, shiftKey: boolean) => {
     setActiveTab('commentaries');
@@ -428,6 +462,20 @@ const StudyRoom = () => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     });
+  };
+
+  // שיתוף מהיר - Web Share API בנייד (פותח את תפריט השיתוף המובנה), נופל בבטחה לקישור וואטסאפ ישיר בדסקטופ
+  const handleQuickShare = async () => {
+    const text = `למדתי היום ${displayRef || ''} בחברותא דיגיטלית! בוא ללמוד איתי:`;
+    if (navigator.share) {
+      try {
+        await navigator.share({ text, url: window.location.href });
+      } catch {
+        // המשתמש ביטל את השיתוף - לא צריך לעשות כלום
+      }
+    } else {
+      window.open(`https://wa.me/?text=${encodeURIComponent(`${text} ${window.location.href}`)}`, '_blank');
+    }
   };
 
   const handleToggleQr = async () => {
@@ -612,6 +660,40 @@ const StudyRoom = () => {
     setChatDraft('');
   };
 
+  // טיימר לימוד חי - סופר רק כשהטאב באמת גלוי (לא כשעברת לטאב אחר), שומר תקופתית כדי לא לאבד זמן בסגירה פתאומית
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      setElapsedSeconds((s) => {
+        const next = s + 1;
+        if (!sessionCountedRef.current && next >= 20) {
+          sessionCountedRef.current = true;
+          incrementSessionCount();
+        }
+        return next;
+      });
+      unsavedSecondsRef.current += 1;
+      if (unsavedSecondsRef.current >= 15) {
+        addStudySeconds(unsavedSecondsRef.current);
+        unsavedSecondsRef.current = 0;
+      }
+    }, 1000);
+
+    const flushOnLeave = () => {
+      if (unsavedSecondsRef.current > 0) {
+        addStudySeconds(unsavedSecondsRef.current);
+        unsavedSecondsRef.current = 0;
+      }
+    };
+    window.addEventListener('beforeunload', flushOnLeave);
+
+    return () => {
+      clearInterval(interval);
+      flushOnLeave();
+      window.removeEventListener('beforeunload', flushOnLeave);
+    };
+  }, []);
+
   // טוען את מיפוי שמות המסכתות (אנגלית -> עברית) כדי להציג את מראה המקום בעברית בכותרת
   useEffect(() => {
     fetch(`${API_URL}/api/tractates`)
@@ -760,6 +842,13 @@ const StudyRoom = () => {
             <div className="font-classic text-lg font-bold text-parchment-50">
               {displayRef || '...'}
             </div>
+            <span
+              className="flex items-center gap-1 text-xs text-parchment-50/60 font-sans tabular-nums shrink-0"
+              title="זמן לימוד בסשן הנוכחי"
+            >
+              <Clock size={12} />
+              {formatTimer(elapsedSeconds)}
+            </span>
           </div>
 
           <div className="flex-1 min-w-[220px] flex gap-2">
@@ -813,6 +902,15 @@ const StudyRoom = () => {
           >
             <QrCode size={15} className="text-brass-light" />
             QR
+          </button>
+          <button
+            onClick={handleQuickShare}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-white/10 hover:bg-white/15 text-parchment-50 rounded-lg text-sm font-medium transition-colors shrink-0"
+            title="שיתוף מהיר של מה שאתה לומד"
+            aria-label="שיתוף מהיר"
+          >
+            <MessageCircle size={15} className="text-brass-light" />
+            שתף מה שלומדים
           </button>
           <button
             onClick={handleCopyLink}

@@ -21,12 +21,17 @@ function saveStudyLog(log: StudyLog) {
   localStorage.setItem(LOG_KEY, JSON.stringify(log));
 }
 
-// נקרא בכל פעם שנטען דף בהצלחה בחדר הלימוד - רישום אוטומטי, בלי צורך בפעולה נוספת מהמשתמש
+// נקרא בכל פעם שנטען דף בהצלחה בחדר הלימוד - רישום אוטומטי, בלי צורך בפעולה נוספת מהמשתמש.
+// אם כבר נלמד בעבר, מרעננים את תאריך הלימוד האחרון (חשוב לחישוב תזכורות חזרה)
 export function logDafStudied(tractateEn: string, daf: number, side: 'a' | 'b') {
   const log = loadStudyLog();
   const entries = log[tractateEn] || [];
-  if (entries.some((e) => e.daf === daf && e.side === side)) return; // כבר נרשם
-  entries.push({ daf, side, ts: Date.now() });
+  const existing = entries.find((e) => e.daf === daf && e.side === side);
+  if (existing) {
+    existing.ts = Date.now();
+  } else {
+    entries.push({ daf, side, ts: Date.now() });
+  }
   log[tractateEn] = entries;
   saveStudyLog(log);
 }
@@ -88,4 +93,27 @@ export function formatStudiedRanges(entries: DafEntry[]): string {
 
 export function countStudiedDapim(entries: DafEntry[]): number {
   return entries.length;
+}
+
+export interface DueEntry {
+  tractateEn: string;
+  daf: number;
+  side: 'a' | 'b';
+  daysSince: number;
+}
+
+// דפים שכדאי לחזור עליהם - לא נלמדו/נצפו כבר X ימים (ברירת מחדל 21 יום), הכי ותיקים קודם
+export function getDueForReview(thresholdDays = 21, limit = 5): DueEntry[] {
+  const log = loadStudyLog();
+  const now = Date.now();
+  const due: DueEntry[] = [];
+  for (const [tractateEn, entries] of Object.entries(log)) {
+    for (const e of entries) {
+      const daysSince = Math.floor((now - e.ts) / 86400000);
+      if (daysSince >= thresholdDays) {
+        due.push({ tractateEn, daf: e.daf, side: e.side, daysSince });
+      }
+    }
+  }
+  return due.sort((a, b) => b.daysSince - a.daysSince).slice(0, limit);
 }
