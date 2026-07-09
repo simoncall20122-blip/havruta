@@ -100,6 +100,7 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
   const [dafYomiLoading, setDafYomiLoading] = useState(false);
   const [dafYomiError, setDafYomiError] = useState('');
   const [tractates, setTractates] = useState<{ he: string; en: string }[]>([]);
+  const [publicRoom, setPublicRoom] = useState<{ roomId: string; ref: string; label: string } | null>(null);
   const [partnersHistory, setPartnersHistory] = useState(() => loadPartnersHistory());
   const [roomMode, setRoomMode] = useState<'pair' | 'group'>('pair');
   const [dedication, setDedication] = useState('');
@@ -117,6 +118,14 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
       .then((res) => res.json())
       .then((data) => setTractates(data.tractates || []))
       .catch((e) => console.error('[מסכתות] שגיאה בטעינת רשימת המסכתות:', e));
+  }, []);
+
+  // חדר "דף היומי" ציבורי - קבוע ליום הזה, פתוח לכולם בלי שידוך מראש
+  useEffect(() => {
+    fetch(`${API_URL}/api/public-room`)
+      .then((res) => res.json())
+      .then((data) => setPublicRoom(data))
+      .catch((e) => console.error('[חדר ציבורי] שגיאה בטעינה:', e));
   }, []);
 
   useEffect(() => {
@@ -219,6 +228,12 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
     onJoinRoom(room.id);
   };
 
+  const handleJoinPublicRoom = () => {
+    if (!publicRoom) return;
+    setMyRooms(persistMyRoom(publicRoom.roomId, publicRoom.label));
+    onJoinRoom(publicRoom.roomId);
+  };
+
   const handleJoinMyRoom = (room: MyRoom) => {
     setMyRooms(persistMyRoom(room.id, room.label)); // מרענן את הזמן לראש הרשימה
     onJoinRoom(room.id);
@@ -288,6 +303,25 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
                 </div>
               </div>
               <ArrowLeft size={20} className="text-brass-light shrink-0" />
+            </button>
+          )}
+
+          {/* חדר "דף היומי" ציבורי - פתוח לכולם, בלי שידוך מראש */}
+          {publicRoom && (
+            <button
+              onClick={handleJoinPublicRoom}
+              className="w-full flex items-center justify-between gap-3 mb-6 p-4 bg-ribbon/5 hover:bg-ribbon/10 border border-ribbon/20 rounded-2xl text-right transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <UsersRound size={20} className="text-ribbon shrink-0" />
+                <div className="min-w-0">
+                  <div className="text-xs text-ribbon-dark font-semibold">בית מדרש פתוח · דף היומי הציבורי</div>
+                  <strong className="block font-classic text-lg text-ink truncate">{publicRoom.label}</strong>
+                </div>
+              </div>
+              <span className="text-xs font-semibold text-ribbon-dark bg-white px-3 py-1.5 rounded-full shrink-0 border border-ribbon/20">
+                הצטרפו עכשיו
+              </span>
             </button>
           )}
 

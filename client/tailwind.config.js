@@ -1,35 +1,40 @@
-{
-  "name": "client",
-  "private": true,
-  "version": "0.0.0",
-  "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Heebo', 'sans-serif'], // גופן ברירת המחדל לממשק
+        classic: ['"David Libre"', 'serif'], // גופן קלאסי לטקסט הלימוד - שונה במתכוון מ-Taamey Frank שספריא משתמשת בו
+      },
+      colors: {
+        // פלטת "כריכת ספר לימוד": ירוק כריכה, פליז, פרגמנט, וסרט סימניה
+        parchment: {
+          50: '#FBF6EA',
+          100: '#F5EDDA',
+          200: '#EAD9B4',
+        },
+        cover: {
+          DEFAULT: '#1E3A2B',
+          dark: '#142820',
+          light: '#2C4E3A',
+        },
+        brass: {
+          DEFAULT: '#A9834A',
+          light: '#C7A467',
+          dark: '#8B6B39',
+        },
+        ribbon: {
+          DEFAULT: '#8B3232',
+          dark: '#6E2626',
+        },
+        ink: '#241C14',
+        hairline: '#D8CBAA',
+      }
+    },
   },
-  "dependencies": {
-    "lucide-react": "^1.23.0",
-    "peerjs": "^1.5.5",
-    "qrcode": "^1.5.4",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "socket.io-client": "^4.8.3"
-  },
-  "devDependencies": {
-    "@tailwindcss/postcss": "^4.3.2",
-    "@types/node": "^24.13.2",
-    "@types/qrcode": "^1.5.6",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.3",
-    "autoprefixer": "^10.5.2",
-    "oxlint": "^1.71.0",
-    "postcss": "^8.5.16",
-    "tailwindcss": "^4.3.2",
-    "typescript": "~6.0.2",
-    "vite": "^8.1.1",
-    "vite-plugin-pwa": "^1.3.0"
-  }
+  plugins: [],
 }
