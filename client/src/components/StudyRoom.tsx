@@ -32,6 +32,8 @@ import {
   Bookmark,
   Highlighter,
   Clock,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import Whiteboard from './Whiteboard';
@@ -194,6 +196,9 @@ const StudyRoom = () => {
   const [partnerMarker, setPartnerMarker] = useState<{ line: number | null; name: string; color?: string } | null>(null);
   const [hoveredLine, setHoveredLine] = useState<number | null>(null);
   const lastMarkerEmitRef = useRef(0);
+  const [textFontSize, setTextFontSize] = useState(() => Number(localStorage.getItem('havruta_font_size')) || 20);
+  const [textNightMode, setTextNightMode] = useState(() => localStorage.getItem('havruta_text_night_mode') === '1');
+  const [showDisplaySettings, setShowDisplaySettings] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatch, setCurrentMatch] = useState(0);
   const lineElsRef = useRef<(HTMLDivElement | null)[]>([]);
@@ -337,6 +342,7 @@ const StudyRoom = () => {
         setShowSchedule(false);
         setQrDataUrl(null);
         setShowMarkerColors(false);
+        setShowDisplaySettings(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -634,6 +640,22 @@ const StudyRoom = () => {
     setMarkerColor(color);
     localStorage.setItem('havruta_marker_color', color);
     setShowMarkerColors(false);
+  };
+
+  const adjustFontSize = (delta: number) => {
+    setTextFontSize((prev) => {
+      const next = Math.min(32, Math.max(14, prev + delta));
+      localStorage.setItem('havruta_font_size', String(next));
+      return next;
+    });
+  };
+
+  const toggleTextNightMode = () => {
+    setTextNightMode((prev) => {
+      const next = !prev;
+      localStorage.setItem('havruta_text_night_mode', next ? '1' : '0');
+      return next;
+    });
   };
 
   const handleExplainSelection = () => {
@@ -1261,6 +1283,51 @@ const StudyRoom = () => {
                           </div>
                         )}
                       </div>
+                      <div className="relative">
+                        <button
+                          onClick={() => setShowDisplaySettings((v) => !v)}
+                          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-ink/60 hover:bg-brass/10 hover:text-brass-dark transition-colors"
+                          aria-label="הגדרות תצוגה - גודל גופן ומצב לילה"
+                          title="הגדרות תצוגה"
+                        >
+                          {textNightMode ? <Moon size={14} /> : <Sun size={14} />}
+                          תצוגה
+                        </button>
+                        {showDisplaySettings && (
+                          <div className="absolute z-20 top-full right-0 mt-1 bg-white border border-hairline rounded-xl shadow-lg p-3 flex flex-col gap-2.5 w-48">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs text-ink/60">גודל גופן</span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => adjustFontSize(-2)}
+                                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-hairline text-ink/70 hover:bg-brass/10 text-sm font-bold"
+                                  aria-label="הקטן גופן"
+                                >
+                                  א-
+                                </button>
+                                <button
+                                  onClick={() => adjustFontSize(2)}
+                                  className="w-7 h-7 flex items-center justify-center rounded-lg border border-hairline text-ink/70 hover:bg-brass/10 text-sm font-bold"
+                                  aria-label="הגדל גופן"
+                                >
+                                  א+
+                                </button>
+                              </div>
+                            </div>
+                            <button
+                              onClick={toggleTextNightMode}
+                              className="flex items-center justify-between text-xs text-ink/60 hover:text-brass-dark transition-colors"
+                            >
+                              <span>מצב לילה לטקסט</span>
+                              <span
+                                className={`flex items-center gap-1 font-semibold ${textNightMode ? 'text-brass-dark' : ''}`}
+                              >
+                                {textNightMode ? <Moon size={14} /> : <Sun size={14} />}
+                              </span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1">
                       <button
@@ -1355,8 +1422,13 @@ const StudyRoom = () => {
                     onMouseLeave={handleMarkerMouseLeave}
                     onTouchMove={handleMarkerTouchMove}
                     onTouchEnd={handleMarkerTouchEnd}
-                    style={markerOn ? { userSelect: 'none', touchAction: 'none' } : undefined}
-                    className="flex-1 overflow-y-auto scroll-parchment min-h-0 px-6 sm:px-8 pb-6 pt-2 font-classic text-xl leading-loose space-y-1 text-ink"
+                    style={{
+                      ...(markerOn ? { userSelect: 'none' as const, touchAction: 'none' as const } : {}),
+                      fontSize: `${textFontSize}px`,
+                      backgroundColor: textNightMode ? '#1a1815' : undefined,
+                      color: textNightMode ? '#e8dcc0' : '#241C14',
+                    }}
+                    className="flex-1 overflow-y-auto scroll-parchment min-h-0 px-6 sm:px-8 pb-6 pt-2 font-classic leading-loose space-y-1 transition-colors"
                   >
                     {text.map((line, i) => {
                       const isMatch = searchMatches.includes(i);
@@ -1643,6 +1715,23 @@ const StudyRoom = () => {
           <>
             <h2 className="text-lg font-bold mb-2 border-b border-ink/20 pb-1">הערות אישיות</h2>
             <p className="whitespace-pre-wrap mb-6 font-sans">{noteText}</p>
+          </>
+        )}
+
+        {sourceTabs.length > 0 && (
+          <>
+            <h2 className="text-lg font-bold mb-2 border-b border-ink/20 pb-1">מקורות מקבילים</h2>
+            {sourceTabs.map((tab) => {
+              if (tab.loading || tab.error || tab.lines.length === 0) return null;
+              return (
+                <div key={tab.id} className="mb-4">
+                  <h3 className="font-bold text-base mb-1">{tab.label}</h3>
+                  {tab.lines.map((l, i) => (
+                    <p key={i} className="mb-1" dangerouslySetInnerHTML={{ __html: l }} />
+                  ))}
+                </div>
+              );
+            })}
           </>
         )}
 

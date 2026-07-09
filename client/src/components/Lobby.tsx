@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { socket } from '../socket';
 import { API_URL } from '../apiBase';
 import { numberToHebrew } from '../studyLog';
+import { recordPartner, loadPartnersHistory } from '../partnersHistory';
 import {
   BookOpen,
   Users,
@@ -23,6 +24,10 @@ import StudyLogView from './StudyLogView';
 import StudyStats from './StudyStats';
 import TractatePacing from './TractatePacing';
 import DueForReview from './DueForReview';
+import DataBackup from './DataBackup';
+import DonationButton from './DonationButton';
+import AchievementBadges from './AchievementBadges';
+import OnboardingTour from './OnboardingTour';
 
 interface ActiveRoom {
   id: string;
@@ -95,6 +100,7 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
   const [dafYomiLoading, setDafYomiLoading] = useState(false);
   const [dafYomiError, setDafYomiError] = useState('');
   const [tractates, setTractates] = useState<{ he: string; en: string }[]>([]);
+  const [partnersHistory, setPartnersHistory] = useState(() => loadPartnersHistory());
   const [roomMode, setRoomMode] = useState<'pair' | 'group'>('pair');
   const [dedication, setDedication] = useState('');
   const [showDedication, setShowDedication] = useState(false);
@@ -135,8 +141,12 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
     });
 
     // מישהו לחץ "בוא נלמד" על הבקשה שאני פרסמתי - מצטרפים אליו אוטומטית
-    socket.on('board_matched', (data: { roomId: string; topic: string }) => {
+    socket.on('board_matched', (data: { roomId: string; topic: string; partnerName?: string }) => {
       setMyRooms(persistMyRoom(data.roomId, data.topic));
+      if (data.partnerName) {
+        recordPartner(data.partnerName, data.topic);
+        setPartnersHistory(loadPartnersHistory());
+      }
       onJoinRoom(data.roomId);
     });
 
@@ -236,11 +246,16 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
   const handleClaimPost = (post: BoardPost) => {
     pendingAiRef.current = false;
     pendingLabelRef.current = post.topic;
-    socket.emit('board_claim', { postId: post.id });
+    recordPartner(post.name, post.topic);
+    setPartnersHistory(loadPartnersHistory());
+    const myName = localStorage.getItem('havruta_chat_name') || 'לומד';
+    socket.emit('board_claim', { postId: post.id, name: myName });
   };
 
   return (
-    <div className="min-h-screen bg-[#EFE9D8] flex flex-col items-center justify-center p-6 font-sans text-ink" dir="rtl">
+    <>
+      <OnboardingTour />
+      <div className="min-h-screen bg-[#EFE9D8] flex flex-col items-center justify-center p-6 font-sans text-ink" dir="rtl">
       <div className="max-w-3xl w-full bg-parchment-50 rounded-2xl shadow-2xl overflow-hidden border border-hairline">
 
         {/* הדר בהשראת כריכת ספר לימוד: ירוק כהה, פליז, וסרט סימניה */}
@@ -393,6 +408,7 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
             onReview={handleReviewDaf}
           />
           <StudyStats />
+          <AchievementBadges />
           <MesechetTracker />
           <StudyLogView />
           <TractatePacing tractates={tractates} />
@@ -514,6 +530,28 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
             </div>
           </div>
 
+          {/* חברותאות קודמות - נשמר במכשיר הזה בלבד, לפי מי שהתאמת איתו דרך הלוח */}
+          {partnersHistory.length > 0 && (
+            <div className="bg-white rounded-2xl border border-hairline mb-8 p-4">
+              <h3 className="flex items-center gap-2 font-bold text-cover text-sm mb-4">
+                <Users size={18} className="text-brass" />
+                חברותאות קודמות
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {partnersHistory.map((p) => (
+                  <div
+                    key={p.name}
+                    className="flex items-center gap-2 px-3 py-2 bg-parchment-50 rounded-xl border border-hairline text-sm"
+                    title={`${p.topic} · ${formatRelativeTime(p.ts)}`}
+                  >
+                    <strong className="text-ink">{p.name}</strong>
+                    <span className="text-xs text-ink/40">{formatRelativeTime(p.ts)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* החדרים שלי - נשמר במכשיר הזה בלבד */}
           {myRooms.length > 0 && (
             <div className="mb-8">
@@ -614,9 +652,13 @@ const Lobby = ({ onJoinRoom }: LobbyProps) => {
               </div>
             )}
           </div>
+
+          <DataBackup />
+          <DonationButton />
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 };
 

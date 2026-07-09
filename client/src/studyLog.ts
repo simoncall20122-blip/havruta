@@ -95,6 +95,12 @@ export function countStudiedDapim(entries: DafEntry[]): number {
   return entries.length;
 }
 
+// סה"כ דפים שנלמדו בכל המסכתות ביחד - לצורך תגי הישג
+export function getTotalDapimStudiedAllTractates(): number {
+  const log = loadStudyLog();
+  return Object.values(log).reduce((sum, entries) => sum + entries.length, 0);
+}
+
 export interface DueEntry {
   tractateEn: string;
   daf: number;

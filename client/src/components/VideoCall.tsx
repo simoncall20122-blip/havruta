@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { socket } from '../socket';
-import { Phone, PhoneOff, Mic, MicOff, Video as VideoIcon, VideoOff, Loader2, MonitorUp, Monitor } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Video as VideoIcon, VideoOff, Loader2, MonitorUp, Monitor, Bell } from 'lucide-react';
 
 interface VideoCallProps {
   roomId: string;
@@ -26,6 +26,7 @@ const VideoCall = ({ roomId }: VideoCallProps) => {
   const [camOn, setCamOn] = useState(true);
   const [error, setError] = useState('');
   const [screenSharing, setScreenSharing] = useState(false);
+  const [attentionPulse, setAttentionPulse] = useState(false);
   const startingRef = useRef(false);
   const screenStreamRef = useRef<MediaStream | null>(null);
 
@@ -217,11 +218,17 @@ const VideoCall = ({ roomId }: VideoCallProps) => {
       endCall(false);
     });
 
+    socket.on('grab_attention', () => {
+      setAttentionPulse(true);
+      setTimeout(() => setAttentionPulse(false), 3000);
+    });
+
     return () => {
       socket.off('video_offer');
       socket.off('video_answer');
       socket.off('video_ice_candidate');
       socket.off('video_hangup');
+      socket.off('grab_attention');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
@@ -235,8 +242,21 @@ const VideoCall = ({ roomId }: VideoCallProps) => {
     };
   }, []);
 
+  const handleGrabAttention = () => {
+    socket.emit('grab_attention', { roomId });
+  };
+
   return (
     <div className="relative h-full bg-ink flex items-center justify-center overflow-hidden">
+      {attentionPulse && (
+        <div className="absolute inset-0 z-20 pointer-events-none border-4 border-brass animate-pulse rounded-lg" />
+      )}
+      {attentionPulse && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 bg-brass text-cover-dark text-sm font-bold px-3 py-1.5 rounded-full shadow-md">
+          <Bell size={14} />
+          החברותא קורא לך
+        </div>
+      )}
       <video ref={remoteVideoRef} autoPlay playsInline className="w-full h-full object-cover bg-ink" />
 
       {!remoteJoined && (
@@ -309,6 +329,14 @@ const VideoCall = ({ roomId }: VideoCallProps) => {
               aria-label={screenSharing ? 'עצור שיתוף מסך' : 'שתף מסך'}
             >
               {screenSharing ? <Monitor size={16} /> : <MonitorUp size={16} />}
+            </button>
+            <button
+              onClick={handleGrabAttention}
+              className="p-2.5 rounded-full bg-white/15 text-parchment-50 hover:bg-white/20 transition-colors"
+              title="תפוס תשומת לב - לוחץ כשרוצים להסב תשומת לב"
+              aria-label="תפוס תשומת לב של החברותא"
+            >
+              <Bell size={16} />
             </button>
             <button
               onClick={() => endCall(true)}
