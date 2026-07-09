@@ -188,6 +188,9 @@ const StudyRoom = () => {
   const [noteText, setNoteText] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const [markerOn, setMarkerOn] = useState(false);
+  const [commentarySearch, setCommentarySearch] = useState('');
+  const [debouncedCommentarySearch, setDebouncedCommentarySearch] = useState('');
+  const [searchingCommentaries, setSearchingCommentaries] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const unsavedSecondsRef = useRef(0);
   const sessionCountedRef = useRef(false);
@@ -238,6 +241,7 @@ const StudyRoom = () => {
       setSelectedRange(null);
       setPartnerMarker(null);
       setOpenCommentaries({});
+      setCommentarySearch('');
 
       // תיעוד לימוד אוטומטי - נרשם כ"נלמד" ברגע שהדף נטען בהצלחה בחדר
       const parsed = parseDafRef(ref);
@@ -382,6 +386,30 @@ const StudyRoom = () => {
         return Array.from(grouped.values());
       })();
 
+  // כשיש חיפוש פעיל, טוענים מראש את הטקסט של כל המפרשים המוצגים (אם עדיין לא נטענו) כדי לחפש גם בתוכן שלהם
+  useEffect(() => {
+    if (!debouncedCommentarySearch || lineCommentators.length === 0) return;
+    let cancelled = false;
+    setSearchingCommentaries(true);
+    Promise.all(lineCommentators.map((c) => ensureCommentaryFetched(c))).finally(() => {
+      if (!cancelled) setSearchingCommentaries(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedCommentarySearch, lineCommentators.map((c) => c.en).join(',')]);
+
+  // מסנן לפי שם המפרש או לפי תוכן פנימי של דבריו (בטקסט שכבר נטען)
+  const filteredCommentators = !debouncedCommentarySearch
+    ? lineCommentators
+    : lineCommentators.filter((c) => {
+        if (c.he.includes(debouncedCommentarySearch)) return true;
+        const state = openCommentaries[c.en];
+        if (!state || state.loading) return false;
+        return state.lines.some((line) => stripTags(line).includes(debouncedCommentarySearch));
+      });
+
   // מקורות מקבילים שייכים לסוגיה כולה, לא לשורה ספציפית (בניגוד למפרשים) - לכן לא תלוי בבחירת שורה
   const pageParallels = (() => {
     const seen = new Set<string>();
@@ -462,6 +490,27 @@ const StudyRoom = () => {
       setOpenCommentaries((prev) => ({ ...prev, [c.en]: { loading: false, lines: [], error: true } }));
     }
   };
+
+  // טוען את הטקסט של מפרש רק אם עדיין לא נטען - לשימוש בחיפוש תוכן, בלי לגעת במצב פתוח/סגור
+  const ensureCommentaryFetched = async (c: { en: string; refs: string[] }) => {
+    if (openCommentaries[c.en]) return; // כבר טעון או בטעינה
+    setOpenCommentaries((prev) => ({ ...prev, [c.en]: { loading: true, lines: [], error: false } }));
+    try {
+      const results = await Promise.all(
+        c.refs.map((ref) => fetch(`${API_URL}/api/text/${encodeURIComponent(ref)}`).then((r) => r.json()))
+      );
+      const lines = results.flatMap((d) => (Array.isArray(d.hebrewText) ? d.hebrewText : [d.hebrewText]).filter(Boolean));
+      setOpenCommentaries((prev) => ({ ...prev, [c.en]: { loading: false, lines, error: lines.length === 0 } }));
+    } catch {
+      setOpenCommentaries((prev) => ({ ...prev, [c.en]: { loading: false, lines: [], error: true } }));
+    }
+  };
+
+  // ממתין קצת אחרי שמפסיקים להקליד לפני שמחפשים בתוכן - כדי לא לשלוח בקשה על כל תו
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedCommentarySearch(commentarySearch.trim()), 400);
+    return () => clearTimeout(timer);
+  }, [commentarySearch]);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href).then(() => {
@@ -1557,15 +1606,35 @@ const StudyRoom = () => {
                         </button>
                       </div>
 
+                      {lineCommentators.length > 0 && (
+                        <div className="relative mb-3">
+                          <Search size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink/30" />
+                          <input
+                            value={commentarySearch}
+                            onChange={(e) => setCommentarySearch(e.target.value)}
+                            placeholder="חפש לפי שם מפרש או תוכן..."
+                            aria-label="חפש במפרשים"
+                            className="w-full pr-8 pl-3 py-2 text-sm bg-parchment-50 border border-hairline rounded-lg focus:outline-none focus:ring-2 focus:ring-brass"
+                          />
+                          {searchingCommentaries && (
+                            <Loader2 size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink/30 animate-spin" />
+                          )}
+                        </div>
+                      )}
+
                       {lineCommentators.length === 0 ? (
                         <div className="text-center text-ink/40 py-8 text-sm px-2">
                           {allLinks.length === 0
                             ? 'לא התקבלו נתוני מפרשים מספריא עבור דף זה - ודא שמראה המקום תקין.'
                             : 'לא נמצא מפרש ישיר לשורה זו, נסה שורה סמוכה.'}
                         </div>
+                      ) : filteredCommentators.length === 0 ? (
+                        <div className="text-center text-ink/40 py-8 text-sm px-2">
+                          {searchingCommentaries ? 'מחפש...' : 'לא נמצאה התאמה לחיפוש.'}
+                        </div>
                       ) : (
                         <div className="space-y-2">
-                          {lineCommentators.map((c) => {
+                          {filteredCommentators.map((c) => {
                             const state = openCommentaries[c.en];
                             const isOpen = !!state;
                             return (
